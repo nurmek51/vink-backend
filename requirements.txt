@@ -7,3 +7,4 @@ firebase-admin
 google-cloud-firestore
 httpx
 pydantic-settings
+pytest
