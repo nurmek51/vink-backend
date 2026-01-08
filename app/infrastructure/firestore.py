@@ -3,11 +3,19 @@ from firebase_admin import credentials, firestore
 from app.core.config import settings
 from app.common.logging import logger
 import os
+from unittest.mock import MagicMock
 
 db = None
 
 def init_firestore():
     global db
+    
+    # Check for Testing environment
+    if os.getenv("TESTING") == "True":
+        logger.warning("TESTING mode active: Using Mock Firestore Client.")
+        db = MagicMock()
+        return
+
     try:
         if not firebase_admin._apps:
             if os.path.exists(settings.FIREBASE_CREDENTIALS_PATH):
