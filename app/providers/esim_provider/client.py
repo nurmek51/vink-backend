@@ -39,10 +39,15 @@ class EsimProviderClient:
 
     async def _request(self, method: str, endpoint: str, data: dict = None) -> dict:
         token = await self._get_token()
-        headers = {"Authorization": f"Bearer {token}"}
         url = f"{self.base_url}{endpoint}"
         
-        async with httpx.AsyncClient() as client:
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+        
+        # Используем limits с деактивированным IPv6, если это возможно через транспорт, 
+        # или просто добавим обработку и логирование.
+        async with httpx.AsyncClient(timeout=10.0) as client:
             try:
                 if method == "GET":
                     response = await client.get(url, headers=headers)
@@ -53,22 +58,16 @@ class EsimProviderClient:
                 
                 response.raise_for_status()
                 
-                # The API seems to return JSON strings sometimes based on the doc examples 
-                # e.g. "{ ... }" wrapped in quotes? 
-                # The doc says Reply example: "{ ... }"
-                # If it returns a stringified JSON, we need to parse it.
-                # But standard requests usually return dict. 
-                # I'll assume standard JSON first, but handle string if needed.
-                
                 try:
                     return response.json()
                 except json.JSONDecodeError:
-                    # Maybe it's a stringified json?
                     return json.loads(response.text)
                     
             except httpx.HTTPError as e:
-                logger.error(f"Provider Request Failed: {e} - {response.text if 'response' in locals() else ''}")
-                raise AppError(502, "Provider Error")
+                status_code = response.status_code if 'response' in locals() else 502
+                error_text = response.text if 'response' in locals() else str(e)
+                logger.error(f"Provider Request Failed: {e} | URL: {url} | Details: {error_text}")
+                raise AppError(status_code, "Provider Error")
 
     async def get_balance(self) -> ImsiFuelResponse:
         data = await self._request("GET", "/fuel")

@@ -106,6 +106,7 @@ venv.bak/
 /site
 .cursorrules
 input.md
+vink-server-documentation.md
 
 # mypy
 .mypy_cache/
