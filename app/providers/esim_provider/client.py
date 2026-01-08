@@ -2,7 +2,7 @@ import httpx
 from app.core.config import settings
 from app.providers.esim_provider.schemas import (
     ImsiTokenResponse, ImsiFuelResponse, ImsiInfoResponse, 
-    ImsiListResponse, TopUpResponse, RevokeResponse, AssignResponse
+    ImsiListResponse, ImsiListItem, TopUpResponse, RevokeResponse, AssignResponse
 )
 from app.common.exceptions import AppError
 from app.common.logging import logger
@@ -82,18 +82,34 @@ class EsimProviderClient:
             data = json.loads(data)
         return ImsiInfoResponse(**data)
 
-    async def list_imsis(self) -> List[dict]:
+    async def list_imsis(self) -> List[ImsiListItem]:
         data = await self._request("GET", "/list")
         # The response is {"email": [list]}
         # We need to extract the list.
         if isinstance(data, str):
-            data = json.loads(data)
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse list response: {data}")
+                return []
         
-        # Flatten the values
+        # Flatten the values and convert to ImsiListItem
         all_imsis = []
         for key, value in data.items():
             if isinstance(value, list):
-                all_imsis.extend(value)
+                for item in value:
+                    try:
+                        if isinstance(item, dict):
+                            all_imsis.append(ImsiListItem(**item))
+                        elif isinstance(item, list) and len(item) >= 3:
+                            # Handling potential list of lists case based on AttributeError
+                            all_imsis.append(ImsiListItem(
+                                imsi=str(item[0]),
+                                msisdn=str(item[1]),
+                                balance=float(item[2])
+                            ))
+                    except Exception as e:
+                        logger.error(f"Failed to parse IMSI item {item}: {e}")
         return all_imsis
 
     async def get_revoked_msisdns(self) -> List[str]:
