@@ -8,6 +8,8 @@ services:
       - "80:8000"
     env_file:
       - .env
+    volumes:
+      - ./vink-testik.json:/app/vink-testik.json
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
