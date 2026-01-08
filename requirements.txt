@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-multipart
+python-jose[cryptography]
+passlib[bcrypt]
+firebase-admin
+google-cloud-firestore
+httpx
+pydantic-settings
