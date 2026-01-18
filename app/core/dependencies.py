@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.core.jwt import decode_token
 from app.common.exceptions import UnauthorizedError, ForbiddenError
 from app.modules.users.schemas import User
+from app.modules.users.repository import UserRepository
 
 security = HTTPBearer()
 
@@ -15,26 +16,17 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise UnauthorizedError("Could not validate credentials")
     
     user_id: str = payload.get("sub")
-    phone: str = payload.get("phone")
-    apps: list = payload.get("apps")
+    if user_id is None:
+        raise UnauthorizedError("Invalid token payload: missing user_id")
     
-    if user_id is None or phone is None:
-        raise UnauthorizedError("Invalid token payload")
+    # Fetch comprehensive user data from Repository to ensure validity and freshness
+    repo = UserRepository()
+    user = await repo.get_user(user_id)
+    
+    if user is None:
+        raise UnauthorizedError("User not found")
         
-    # In a real app, we might want to fetch the user from DB to ensure they still exist/are active.
-    # For now, we trust the token as per "Stateless" JWT, but the prompt says "Single Identity Model".
-    # Let's construct the User object from token data to avoid DB hit on every request if possible,
-    # OR fetch from DB. Fetching from DB is safer.
-    
-    # For this implementation, I'll construct a basic User object from the token to be fast,
-    # but ideally we should check the DB.
-    
-    return User(
-        id=user_id,
-        phone_number=phone,
-        apps_enabled=apps,
-        created_at=datetime.fromtimestamp(payload.get("iat", 0)) # Approximate
-    )
+    return user
 
 from datetime import datetime
 
