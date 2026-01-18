@@ -28,3 +28,9 @@ class EsimRepository:
         # Get all esims that have an IMSI assigned
         docs = self.collection.stream()
         return [doc.to_dict().get("imsi") for doc in docs if doc.to_dict().get("imsi")]
+
+    async def get_esim_by_imsi(self, imsi: str) -> Optional[dict]:
+        docs = self.collection.where("imsi", "==", imsi).limit(1).stream()
+        for doc in docs:
+            return doc.to_dict()
+        return None

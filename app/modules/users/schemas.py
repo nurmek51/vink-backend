@@ -22,7 +22,7 @@ class UserUpdate(BaseModel):
 
 class BalanceTopUpRequest(BaseModel):
     amount: float
-    esim_id: Optional[str] = None # If provided, funds go to eSIM
+    imsi: Optional[str] = None # If provided, funds go to this IMSI
 
 class ChangePasswordRequest(BaseModel):
     old_password: str

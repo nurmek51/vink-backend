@@ -49,11 +49,11 @@ class UserService:
     async def delete_user(self, user_id: str):
         await self.repository.delete_user(user_id)
 
-    async def top_up_balance(self, user_id: str, amount: float, esim_id: Optional[str] = None):
+    async def top_up_balance(self, user_id: str, amount: float, imsi: Optional[str] = None):
         user = await self.get_profile(user_id)
         
-        if esim_id:
-            # Case 1: eSIM Top-Up (Spend User Balance -> Fund Provider eSIM)
+        if imsi:
+            # Case 1: eSIM Top-Up (Spend User Balance -> Fund Provider eSIM by IMSI)
             if user.balance < amount:
                 raise AppError(400, "Insufficient funds in your account balance")
             
@@ -61,13 +61,13 @@ class UserService:
             from app.modules.esim.service import EsimService
             esim_service = EsimService()
             # This method in EsimService should just handle the provider call
-            await esim_service.top_up_esim_internal(user, esim_id, amount)
+            await esim_service.top_up_esim_by_imsi(user, imsi, amount)
             
             # Deduct from Wallet
             new_balance = user.balance - amount
             await self.repository.update_user(user_id, {"balance": new_balance})
             
-            await self._log_transaction(user_id, "esim_top_up", amount, description=f"Top Up eSIM {esim_id}")
+            await self._log_transaction(user_id, "esim_top_up", amount, description=f"Top Up IMSI {imsi}")
             
         else:
             # Case 2: User Wallet Top-Up (Deposit funds)

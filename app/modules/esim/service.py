@@ -159,16 +159,16 @@ class EsimService:
         
         return await self.get_esim_by_id(user, esim_id)
 
-    async def top_up_esim_internal(self, user: User, esim_id: str, amount: float):
+    async def top_up_esim_by_imsi(self, user: User, imsi: str, amount: float):
         # Internal method called by UserService
-        # 1. Verify ownership
-        esim_data = await self.repository.get_esim(esim_id)
+        # 1. Verify ownership of this IMSI via DB
+        esim_data = await self.repository.get_esim_by_imsi(imsi)
         if not esim_data or esim_data.get("user_id") != user.id:
-            raise NotFoundError("eSIM not found")
+            raise NotFoundError("IMSIs not found or not owned by user")
 
         # 2. Request Top-up from Provider
         # Propagate AppError from client (e.g. 400 Insufficient Reseller Funds)
-        await self.provider.top_up(esim_data["imsi"], amount)
+        await self.provider.top_up(imsi, amount)
             
         # 3. Update local record of total data/limit
         esim_data["data_limit"] = esim_data.get("data_limit", 0.0) + amount
