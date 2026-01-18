@@ -30,11 +30,9 @@ class UserService:
             "imsi": [
                 {
                     "imsi": e.imsi,
-                    "balance": 0.0, # Provider logic returning 'BALANCE'? e.data_remaining?
-                    # The provider 'BALANCE' can be mapped. Esim schema doesn't hold provider balance explicitly yet
-                    # but assumes 'data_used' and 'data_limit'
+                    "balance": e.provider_balance,
                     "country": e.country,
-                    "iso": "DE", # Hardcoded or needs lookup map based on MCC/MNC
+                    "iso": "DE", 
                     "brand": e.provider,
                     "rate": 0.05,
                     "qr": e.qr_code,

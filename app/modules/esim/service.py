@@ -19,34 +19,44 @@ class EsimService:
         
         esims = []
         for data in user_esims_data:
-            # 2. Fetch fresh info from provider for each IMSI
-            # This is slow O(N) but precise. For optimization, we could use list_imsis and map.
+            imsi_info = None
             try:
+                # 2. Sync with Provider "Master Profile" data
                 imsi_info = await self.provider.get_imsi_info(data["imsi"])
-                
-                # Update local DB if needed? Maybe balance?
-                # For now just construct response object mixing DB data and Provider data
-                esim = Esim(
-                    id=data["id"],
-                    user_id=user.id,
-                    name=data.get("name", "Travel eSIM"),
-                    imsi=imsi_info.IMSI,
-                    iccid=imsi_info.ICCID,
-                    msisdn=imsi_info.MSISDN,
-                    data_used=0.0, # Provider doesn't explicitly return Used, only Balance.
-                    # Assumption: FUEL/Balance is remaining credit or data?
-                    # input.md says "BALANCE: 125.12". Usually currency.
-                    # We might need to map this.
-                    # user_esim_data might have 'data_limit' from when it was purchased.
-                    data_limit=data.get("data_limit", 0.0),
-                    is_active=True # user owns it
-                )
-                esims.append(esim)
-            except Exception as e:
-                # If provider check fails, return what we have in DB or skip?
-                # Better to show partial data or error?
-                # We'll continue for robustness, maybe mark as stale
+            except Exception:
+                # If provider fails, we rely on DB or skip? 
+                # Better to show what we have in DB to not block user
                 pass
+
+            # QUESTION: input.md does not provide SMDP+ Address or Activation Code (QR data) in ImsiInfo.
+            # However, the App requires 'qr' and 'activationCode' to install the eSIM.
+            # I am filling these with placeholders. Please clarify source of SMDP data.
+            qr_code = data.get("qr_code", "LPA:1$smdp.example.com$UNKNOWN")
+            activation_code = data.get("activation_code", "UNKNOWN")
+
+            # Map Provider Balance to Data Used/Remaining logic
+            # input.md says 'BALANCE' is available. 
+            # We assume 'data_limit' is what user bought (e.g. 5.0 GB or $5.00).
+            # If BALANCE is numeric, we store it.
+            provider_balance = 0.0
+            if imsi_info and imsi_info.BALANCE is not None:
+                provider_balance = float(imsi_info.BALANCE)
+
+            esim = Esim(
+                id=data["id"],
+                user_id=user.id,
+                name=data.get("name", "Travel eSIM"),
+                imsi=data["imsi"],
+                iccid=imsi_info.ICCID if imsi_info else data.get("iccid"),
+                msisdn=imsi_info.MSISDN if imsi_info else data.get("msisdn"),
+                data_used=max(0.0, data.get("data_limit", 0.0) - provider_balance), 
+                data_limit=data.get("data_limit", 0.0),
+                is_active=bool(imsi_info.MSISDN if imsi_info else data.get("msisdn")), 
+                qr_code=qr_code,
+                activation_code=activation_code,
+                provider_balance=provider_balance
+            )
+            esims.append(esim)
                 
         return esims
 
@@ -58,6 +68,10 @@ class EsimService:
             
         # Fetch provider info
         imsi_info = await self.provider.get_imsi_info(data["imsi"])
+
+        # QUESTION: Same as above re: QR/SMDP
+        qr_code = data.get("qr_code", "LPA:1$smdp.example.com$UNKNOWN")
+        activation_code = data.get("activation_code", "UNKNOWN")
         
         return Esim(
             id=data["id"],
@@ -66,39 +80,51 @@ class EsimService:
             imsi=imsi_info.IMSI,
             iccid=imsi_info.ICCID,
             msisdn=imsi_info.MSISDN,
-            data_limit=data.get("data_limit", 0.0)
+            data_limit=data.get("data_limit", 0.0),
+            qr_code=qr_code,
+            activation_code=activation_code
         )
 
     async def activate_esim(self, user: User, esim_id: str, code: str) -> Esim:
-        # Logic: Assign an available MSISDN to the IMSI?
-        # input.md says "Assigning MSISDN to IMSI" from Revoked list.
-        # This seems to be the "Activation" step equivalent.
+        # EXPLANATION: "Activate" in this context implies assigning a real MSISDN to the IMSI
+        # so it becomes functional on the network.
         
         # 1. Get eSIM
         esim_data = await self.repository.get_esim(esim_id)
         if not esim_data or esim_data.get("user_id") != user.id:
             raise NotFoundError("eSIM not found")
 
-        # 2. Get available MSISDNs
+        # 2. Get available MSISDNs ("Revoked" list on Provider)
         revoked_list = await self.provider.get_revoked_msisdns()
         if not revoked_list:
             raise AppError(503, "No numbers available for activation")
             
+        # 3. Pick one
         msisdn_to_assign = revoked_list[0]
         
-        # 3. Assign
+        # 4. Assign via Provider API
         await self.provider.assign_msisdn(esim_data["imsi"], msisdn_to_assign)
         
-        # 4. Return updated info
+        # 5. Update DB (Optional, but good for cache)
+        esim_data["msisdn"] = msisdn_to_assign
+        await self.repository.save_esim(esim_data)
+        
+        # 6. Return updated info
         return await self.get_esim_by_id(user, esim_id)
 
     async def deactivate_esim(self, user: User, esim_id: str):
-        # Logic: Revoke MSISDN
+        # EXPLANATION: "Deactivate" implies revoking the MSISDN, putting it back "on the shelf".
+        # The IMSI remains with the user, but has no number.
+        
         esim_data = await self.repository.get_esim(esim_id)
         if not esim_data or esim_data.get("user_id") != user.id:
             raise NotFoundError("eSIM not found")
             
         await self.provider.revoke_msisdn(esim_data["imsi"])
+        
+        # Update DB
+        esim_data["msisdn"] = None
+        await self.repository.save_esim(esim_data)
 
     async def update_esim_settings(self, user: User, esim_id: str, data: UpdateSettingsRequest) -> Esim:
         # Update name in DB
@@ -167,13 +193,19 @@ class EsimService:
         ]
 
     async def purchase_esim(self, user: User, tariff_id: str) -> Esim:
-        # 1. Fetch all IMSI from Provider
+        # 1. Validate Tariff
+        # QUESTION: When purchasing a tariff, do we need to call provider.top_up(imsi, amount)?
+        # The input.md has /topup endpoint. If a user buys 1GB, we might need to fund the IMSI.
+        # For now, I assume the IMSI from "Master Profile" might already be funded or we fund it later.
+        # Implementation: Allocate one from Master Profile -> Store in User Profile.
+        
+        # 2. Fetch all IMSI from Provider ("Master Profile" full list)
         all_imsis_provider = await self.provider.list_imsis()
         
-        # 2. Fetch all allocated IMSIs from DB
+        # 3. Fetch all allocated IMSIs from DB
         allocated = await self.repository.get_all_allocated_imsis()
         
-        # 3. Find one unallocated
+        # 4. Find one unallocated (exclusive allocation logic)
         target_imsi_item = None
         for item in all_imsis_provider:
              if item.imsi not in allocated:
@@ -182,16 +214,30 @@ class EsimService:
         
         if not target_imsi_item:
             raise AppError(503, "No available eSIMs in stock")
+        
+        # Get Tariff details for local limit
+        # In a real app, fetch from DB. Mocking lookup here based on ID.
+        data_limit = 1.0
+        if "5gb" in tariff_id:
+            data_limit = 5.0
             
-        # 4. Allocate (Database Record)
+        # 5. Allocate (Database Record)
         new_esim_id = str(uuid.uuid4())
+        
+        # QUESTION: Where is QR code? Using placeholder as per previous notes.
+        qr_code = "LPA:1$smdp.example.com$UNKNOWN"
+        activation_code = "UNKNOWN"
+        
         esim_record = {
             "id": new_esim_id,
             "user_id": user.id,
             "imsi": target_imsi_item.imsi,
             "msisdn": target_imsi_item.msisdn, 
             "status": "created",
-            "data_limit": 1.0, # Determine from tariff_id logic
+            "data_limit": data_limit,
+            "name": f"Travel eSIM {target_imsi_item.imsi[-4:]}",
+            "qr_code": qr_code,
+            "activation_code": activation_code,
             "created_at": datetime.datetime.utcnow().isoformat()
         }
         
@@ -202,6 +248,8 @@ class EsimService:
             user_id=user.id,
             imsi=target_imsi_item.imsi,
             msisdn=target_imsi_item.msisdn,
-            data_limit=1.0,
-            status="created"
+            data_limit=data_limit,
+            status="created",
+            qr_code=qr_code,
+            activation_code=activation_code
         )

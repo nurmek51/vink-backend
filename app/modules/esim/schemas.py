@@ -48,6 +48,9 @@ class Esim(BaseModel):
     data_used: float = 0.0
     data_limit: float = 0.0
     activation_date: Optional[datetime] = None
+    qr_code: Optional[str] = None
+    activation_code: Optional[str] = None
+    provider_balance: Optional[float] = 0.0 # Carry numeric balance from provider
     expiration_date: Optional[datetime] = None
     status: str = "active"
     qr_code: Optional[str] = None
