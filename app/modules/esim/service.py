@@ -159,6 +159,25 @@ class EsimService:
         
         return await self.get_esim_by_id(user, esim_id)
 
+    async def top_up_esim_internal(self, user: User, esim_id: str, amount: float):
+        # Internal method called by UserService
+        # 1. Verify ownership
+        esim_data = await self.repository.get_esim(esim_id)
+        if not esim_data or esim_data.get("user_id") != user.id:
+            raise NotFoundError("eSIM not found")
+
+        # 2. Request Top-up from Provider
+        try:
+            await self.provider.top_up(esim_data["imsi"], amount)
+        except Exception as e:
+            from app.common.logging import logger
+            logger.error(f"Provider topup failed for {esim_data['imsi']}: {e}")
+            raise AppError(503, "Failed to top up eSIM with provider")
+            
+        # 3. Update local record of total data/limit
+        esim_data["data_limit"] = esim_data.get("data_limit", 0.0) + amount
+        await self.repository.save_esim(esim_data)
+
     async def top_up_esim(self, user: User, esim_id: str, amount: float) -> Esim:
         # 1. Verify ownership
         esim_data = await self.repository.get_esim(esim_id)

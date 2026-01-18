@@ -40,7 +40,7 @@ async def top_up_balance(
     request: BalanceTopUpRequest,
     current_user: User = Depends(get_current_user)
 ):
-    await service.top_up_balance(current_user.id, request.amount)
+    await service.top_up_balance(current_user.id, request.amount, request.esim_id)
     return ResponseBase()
 
 @router.get("/user/balance/history", response_model=DataResponse[BalanceHistoryResponse])

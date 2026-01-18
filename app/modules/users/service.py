@@ -49,22 +49,44 @@ class UserService:
     async def delete_user(self, user_id: str):
         await self.repository.delete_user(user_id)
 
-    async def top_up_balance(self, user_id: str, amount: float):
-        # Implementation depends on payment gateway integration
+    async def top_up_balance(self, user_id: str, amount: float, esim_id: Optional[str] = None):
         user = await self.get_profile(user_id)
-        new_balance = user.balance + amount
-        await self.repository.update_user(user_id, {"balance": new_balance})
-        # Log transaction
-        await self._log_transaction(user_id, "top_up", amount)
+        
+        if esim_id:
+            # Case 1: eSIM Top-Up (Spend User Balance -> Fund Provider eSIM)
+            if user.balance < amount:
+                raise AppError(400, "Insufficient funds in your account balance")
+            
+            # Delegate to EsimService
+            from app.modules.esim.service import EsimService
+            esim_service = EsimService()
+            # This method in EsimService should just handle the provider call
+            await esim_service.top_up_esim_internal(user, esim_id, amount)
+            
+            # Deduct from Wallet
+            new_balance = user.balance - amount
+            await self.repository.update_user(user_id, {"balance": new_balance})
+            
+            await self._log_transaction(user_id, "esim_top_up", amount, description=f"Top Up eSIM {esim_id}")
+            
+        else:
+            # Case 2: User Wallet Top-Up (Deposit funds)
+            # Implementation depends on payment gateway integration (mocked here as direct add)
+            new_balance = user.balance + amount
+            await self.repository.update_user(user_id, {"balance": new_balance})
+            await self._log_transaction(user_id, "top_up", amount, description="Wallet Deposit")
 
     async def get_balance_history(self, user_id: str) -> BalanceHistoryResponse:
-        # Fetch from DB (needs Transaction Collection implementation, omitted for now)
-        # Returning empty or mock as per requirements "delete all mock data"
-        # Since I haven't implemented TransactionRepository, I return empty structure
+        # Fetch from DB
+        transactions = await self.repository.get_transactions(user_id)
+        
+        total_top_up = sum(t.amount for t in transactions if t.type == "top_up")
+        total_spent = sum(t.amount for t in transactions if t.type != "top_up")
+        
         return BalanceHistoryResponse(
-            transactions=[],
-            total_top_up=0.0,
-            total_spent=0.0
+            transactions=transactions,
+            total_top_up=total_top_up,
+            total_spent=total_spent
         )
 
     async def change_password(self, user_id: str, old_pass: str, new_pass: str):
@@ -86,6 +108,14 @@ class UserService:
     async def upload_avatar(self, user_id: str, path: str) -> User:
         return await self.repository.update_user(user_id, {"avatar_url": path})
 
-    async def _log_transaction(self, user_id: str, type: str, amount: float):
-        # Helper to log transaction
-        pass
+    async def _log_transaction(self, user_id: str, type: str, amount: float, description: str = ""):
+        txn = Transaction(
+            id=str(uuid.uuid4()),
+            type=type,
+            amount=amount,
+            currency="USD",
+            date=datetime.utcnow(),
+            status="completed",
+            description=description
+        )
+        await self.repository.add_transaction(user_id, txn)

@@ -22,10 +22,22 @@ class ImsiInfoResponse(BaseModel):
     ICCID: str
     IMSI: str
     MSISDN: str
-    BALANCE: Optional[float] = Field(None, alias="BALNCE") # Typo in doc "BALNCE"
-    LASTUPDATE: Optional[str] = None
-    LASTMCC: Optional[Union[int, str]] = None
-    LASTMNC: Optional[Union[int, str]] = None
+    BALANCE: Optional[float] = None # Support both keys
+    BALNCE: Optional[float] = None
+
+    @field_validator('BALANCE', mode='before')
+    @classmethod
+    def check_legacy_balance(cls, v: Any, info: Any) -> Optional[float]:
+        # If 'BALANCE' is present, use it. 
+        # If not, check 'BALNCE' in values if available (Pydantic validator context might be needed if we want dynamic lookup)
+        # But simply defining both optional allows Pydantic to parse what's there.
+        # However, to unify them into 'BALANCE':
+        return v
+    
+    def model_post_init(self, __context: Any) -> None:
+        # After init, if BALANCE is None but BALNCE is set, copy it
+        if self.BALANCE is None and self.BALNCE is not None:
+            self.BALANCE = self.BALNCE
 
     @field_validator('LASTMCC', 'LASTMNC', mode='before')
     @classmethod

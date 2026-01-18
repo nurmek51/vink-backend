@@ -24,3 +24,12 @@ class UserRepository:
 
     async def delete_user(self, user_id: str):
         self.collection.document(user_id).delete()
+
+    async def add_transaction(self, user_id: str, transaction: 'Transaction'):
+        # Subcollection "transactions" under user document
+        self.collection.document(user_id).collection("transactions").document(transaction.id).set(transaction.dict())
+
+    async def get_transactions(self, user_id: str) -> list['Transaction']:
+        from app.modules.users.schemas import Transaction
+        docs = self.collection.document(user_id).collection("transactions").order_by("date", direction="DESCENDING").stream()
+        return [Transaction(**doc.to_dict()) for doc in docs]
