@@ -36,15 +36,6 @@ async def activate_esim(
     esim = await service.activate_esim(current_user, id, request.activation_code)
     return DataResponse(data=esim)
 
-@router.post("/esims/{id}/top-up", response_model=DataResponse[Esim])
-async def top_up_esim(
-    id: str,
-    request: TopUpEsimRequest,
-    current_user: User = Depends(require_app_permission("vink-sim"))
-):
-    esim = await service.top_up_esim(current_user, id, request.amount)
-    return DataResponse(data=esim)
-
 @router.post("/esims/{id}/deactivate")
 async def deactivate_esim(
     id: str,

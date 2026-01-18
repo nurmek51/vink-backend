@@ -126,11 +126,18 @@ class EsimProviderClient:
 
     async def top_up(self, imsi: str, amount: float) -> TopUpResponse:
         # Provider Endpoint: GET /topup/{imsi}/{amount}
-        # Note: Doc says GET, usually POST for topup, but we strictly follow doc.
-        data = await self._request("GET", f"/topup/{imsi}/{amount}")
+        url = f"/topup/{imsi}/{amount}"
+        data = await self._request("GET", url)
         if isinstance(data, str):
             data = json.loads(data)
-        return TopUpResponse(**data)
+        
+        resp = TopUpResponse(**data)
+        if resp.NOT_ADDED is not None or resp.REASON:
+            error_msg = resp.REASON or "Top-up failed at provider"
+            logger.error(f"Provider Top-up Failed: {error_msg} | IMSI: {imsi} | Data: {data}")
+            raise AppError(400, f"Provider error: {error_msg}")
+            
+        return resp
 
     async def get_revoked_msisdns(self) -> List[str]:
         # Provider Endpoint: GET /revoked

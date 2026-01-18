@@ -59,11 +59,11 @@ class ImsiListResponse(BaseModel):
     data: Dict[str, List[ImsiListItem]]
 
 class TopUpResponse(BaseModel):
-    BEFORE: float
+    BEFORE: Optional[float] = None
     ADDED: Optional[float] = None
     NOT_ADDED: Optional[float] = None
     AFTER: Optional[float] = None
-    FUEL: float
+    FUEL: Optional[float] = None
     REASON: Optional[str] = None
 
 class RevokeResponse(BaseModel):
