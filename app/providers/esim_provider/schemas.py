@@ -24,6 +24,9 @@ class ImsiInfoResponse(BaseModel):
     MSISDN: str
     BALANCE: Optional[float] = None # Support both keys
     BALNCE: Optional[float] = None
+    LASTUPDATE: Optional[str] = None
+    LASTMCC: Optional[int] = None
+    LASTMNC: Optional[int] = None
 
     @field_validator('BALANCE', mode='before')
     @classmethod

@@ -3,6 +3,7 @@ from app.modules.users.schemas import User, UserUpdate, BalanceHistoryResponse, 
 from app.common.exceptions import NotFoundError, AppError
 from app.modules.esim.service import EsimService
 from datetime import datetime
+from typing import Optional
 import uuid
 
 class UserService:
