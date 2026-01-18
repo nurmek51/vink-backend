@@ -159,6 +159,39 @@ class EsimService:
         
         return await self.get_esim_by_id(user, esim_id)
 
+    async def top_up_esim(self, user: User, esim_id: str, amount: float) -> Esim:
+        # 1. Verify ownership
+        esim_data = await self.repository.get_esim(esim_id)
+        if not esim_data or esim_data.get("user_id") != user.id:
+            raise NotFoundError("eSIM not found")
+
+        # 2. Check User Wallet Balance
+        # Note: We deduct from the app's internal balance to pay for the provider top-up
+        if user.balance < amount:
+            raise AppError(400, "Insufficient funds in your account balance")
+
+        # 3. Request Top-up from Provider (Imsimarket B2B)
+        try:
+            # input.md: /topup/{imsi}/{amount}
+            await self.provider.top_up(esim_data["imsi"], amount)
+        except Exception as e:
+            from app.common.logging import logger
+            logger.error(f"Provider topup failed for {esim_data['imsi']}: {e}")
+            raise AppError(503, "Failed to top up eSIM with provider")
+
+        # 4. Deduct from local user wallet
+        from app.modules.users.repository import UserRepository
+        user_repo = UserRepository()
+        new_balance = user.balance - amount
+        await user_repo.update_user(user.id, {"balance": new_balance})
+        
+        # 5. Update local record of total data/limit (optional metadata)
+        esim_data["data_limit"] = esim_data.get("data_limit", 0.0) + amount
+        await self.repository.save_esim(esim_data)
+
+        # 6. Return updated eSIM info
+        return await self.get_esim_by_id(user, esim_id)
+
     async def get_esim_usage(self, user: User, esim_id: str) -> UsageData:
         # 1. Verify ownership
         esim_data = await self.repository.get_esim(esim_id)
@@ -216,10 +249,7 @@ class EsimService:
 
     async def purchase_esim(self, user: User, tariff_id: str) -> Esim:
         # 1. Validate Tariff
-        # QUESTION: When purchasing a tariff, do we need to call provider.top_up(imsi, amount)?
-        # The input.md has /topup endpoint. If a user buys 1GB, we might need to fund the IMSI.
-        # For now, I assume the IMSI from "Master Profile" might already be funded or we fund it later.
-        # Implementation: Allocate one from Master Profile -> Store in User Profile.
+        # EXPLANATION: Based on user clarification, IMSIs are pre-funded for initial purchase.
         
         # 2. Fetch all IMSI from Provider ("Master Profile" full list)
         all_imsis_provider = await self.provider.list_imsis()

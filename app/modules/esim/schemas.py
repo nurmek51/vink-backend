@@ -15,6 +15,9 @@ class PurchaseRequest(BaseModel):
     tariff_id: str
     payment_data: Optional[dict] = None
 
+class TopUpEsimRequest(BaseModel):
+    amount: float
+
 class ActivateRequest(BaseModel):
     activation_code: str
 

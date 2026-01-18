@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from app.modules.esim.service import EsimService
 from app.modules.esim.schemas import (
     Esim, Tariff, PurchaseRequest, ActivateRequest, 
-    UpdateSettingsRequest, UsageData
+    UpdateSettingsRequest, UsageData, TopUpEsimRequest
 )
 from app.core.dependencies import get_current_user, require_app_permission
 from app.modules.users.schemas import User
@@ -34,12 +34,15 @@ async def activate_esim(
     current_user: User = Depends(require_app_permission("vink-sim"))
 ):
     esim = await service.activate_esim(current_user, id, request.activation_code)
-    # The doc says returns Esim object "Response (200): eSIM object with status='active'"
-    # But usually actions return result. Let's return the updated Esim wrapped in DataResponse?
-    # Or just default success. The response example says "eSIM object".
-    # But my schema says ResponseBase for simplicity sometimes. Let's follow doc.
-    # Wait, doc says "Response (200): eSIM object...".
-    # I will return the object.
+    return DataResponse(data=esim)
+
+@router.post("/esims/{id}/top-up", response_model=DataResponse[Esim])
+async def top_up_esim(
+    id: str,
+    request: TopUpEsimRequest,
+    current_user: User = Depends(require_app_permission("vink-sim"))
+):
+    esim = await service.top_up_esim(current_user, id, request.amount)
     return DataResponse(data=esim)
 
 @router.post("/esims/{id}/deactivate")
