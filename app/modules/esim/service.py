@@ -93,23 +93,34 @@ class EsimService:
         esim_data = await self.repository.get_esim(esim_id)
         if not esim_data or esim_data.get("user_id") != user.id:
             raise NotFoundError("eSIM not found")
+        
+        # 2. Check Provider Status (Idempotency)
+        try:
+            imsi_info = await self.provider.get_imsi_info(esim_data["imsi"])
+            current_msisdn = imsi_info.MSISDN
+            # If MSISDN does NOT start with "48", it is ALREADY ACTIVE (Real Number).
+            if current_msisdn and not current_msisdn.startswith("48"):
+                return await self.get_esim_by_id(user, esim_id)
+        except Exception:
+            # Fallback to process if check fails
+            pass
 
-        # 2. Get available MSISDNs ("Revoked" list on Provider)
+        # 3. Get available MSISDNs ("Revoked" list on Provider)
         revoked_list = await self.provider.get_revoked_msisdns()
         if not revoked_list:
             raise AppError(503, "No numbers available for activation")
             
-        # 3. Pick one
+        # 4. Pick one
         msisdn_to_assign = revoked_list[0]
         
-        # 4. Assign via Provider API
+        # 5. Assign via Provider API
         await self.provider.assign_msisdn(esim_data["imsi"], msisdn_to_assign)
         
-        # 5. Update DB (Optional, but good for cache)
+        # 6. Update DB (Optional, but good for cache)
         esim_data["msisdn"] = msisdn_to_assign
         await self.repository.save_esim(esim_data)
         
-        # 6. Return updated info
+        # 7. Return updated info
         return await self.get_esim_by_id(user, esim_id)
 
     async def deactivate_esim(self, user: User, esim_id: str):
@@ -119,6 +130,17 @@ class EsimService:
         esim_data = await self.repository.get_esim(esim_id)
         if not esim_data or esim_data.get("user_id") != user.id:
             raise NotFoundError("eSIM not found")
+
+        # Check Provider Status (Idempotency)
+        # Avoid "Impossible to revoke technical MSISDN" error
+        try:
+            imsi_info = await self.provider.get_imsi_info(esim_data["imsi"])
+            current_msisdn = imsi_info.MSISDN
+            # If starts with "48", it is ALREADY INACTIVE (Technical Number).
+            if current_msisdn and current_msisdn.startswith("48"):
+                return
+        except Exception:
+            pass
             
         await self.provider.revoke_msisdn(esim_data["imsi"])
         

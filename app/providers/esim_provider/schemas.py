@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field, field_validator
+from typing import List, Optional, Dict, Any, Union
 
 class ImsiTokenResponse(BaseModel):
     access_token: str
@@ -7,6 +7,7 @@ class ImsiTokenResponse(BaseModel):
     token_type: str
 
 class ImsiFuelResponse(BaseModel):
+    # ... (fields unchanged)
     MVNO_WALLET: str
     MVNO_NAME: str
     MVNO_BALANCE: float
@@ -23,8 +24,15 @@ class ImsiInfoResponse(BaseModel):
     MSISDN: str
     BALANCE: Optional[float] = Field(None, alias="BALNCE") # Typo in doc "BALNCE"
     LASTUPDATE: Optional[str] = None
-    LASTMCC: Optional[int] = None
-    LASTMNC: Optional[int] = None
+    LASTMCC: Optional[Union[int, str]] = None
+    LASTMNC: Optional[Union[int, str]] = None
+
+    @field_validator('LASTMCC', 'LASTMNC', mode='before')
+    @classmethod
+    def parse_nullable_int(cls, v: Any) -> Optional[int]:
+        if v == "NULL" or v == "null" or v == "":
+            return None
+        return v
 
 class ImsiListItem(BaseModel):
     imsi: str
