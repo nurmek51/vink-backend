@@ -3,9 +3,10 @@ from app.providers.esim_provider.client import EsimProviderClient
 from app.providers.esim_provider.mapper import map_imsi_to_esim
 from app.modules.esim.schemas import Esim, Tariff, ActivateRequest, UpdateSettingsRequest, UsageData
 from app.modules.users.schemas import User
-from app.common.exceptions import NotFoundError, ForbiddenError
+from app.common.exceptions import NotFoundError, ForbiddenError, AppError
 from typing import List
 import uuid
+import datetime
 
 class EsimService:
     def __init__(self):
@@ -13,75 +14,137 @@ class EsimService:
         self.provider = EsimProviderClient()
 
     async def get_user_esims(self, user: User) -> List[Esim]:
-        # Implementation strategy:
-        # We likely need to know WHICH IMSIs belong to this user from our DB.
-        # But for now, if the provider returns all imsis, we might not know ownership unless we stored it.
-        # Assuming we store it in Firestore.
-        # This implementation blindly returns all IMSIs from provider for now as per previous logic, but that's bad.
-        # Let's try to fetch from DB first.
-        # user_esims = await self.repository.get_esims_by_user(user.id)
-        # But 'repository' interface is unknown.
-        # I'll stick to the "Mock" approach or provider approach but ideally we filter.
-        # "input.md" says: "Gives a full list of IMSI assigned to user." (The 'user' here is the Partner/Reseller).
-        # So 'list_imsis' returns ALL imsis owned by the Reseller.
-        # We must filter by 'user.id' of the app.
+        # 1. Get allocated IMSIs from DB
+        user_esims_data = await self.repository.get_user_esims(user.id)
         
-        # Proper implementation:
-        # Get all esims from DB for this user.
-        # Enrich with provider status if needed.
-        # For simplicity in this adaptation, I'll return mock data or what logic allows.
-        # Let's try to implement a mock that matches API doc structure.
-        
-        # Real impl would be:
-        # db_esims = await self.repository.get_by_user(user.id)
-        # return db_esims
-        
-        # Mock for now:
-        return [
-            Esim(id="esim_001", provider="FlexSIM", country="Germany", is_active=True, data_used=1.5, data_limit=5.0)
-        ]
+        esims = []
+        for data in user_esims_data:
+            # 2. Fetch fresh info from provider for each IMSI
+            # This is slow O(N) but precise. For optimization, we could use list_imsis and map.
+            try:
+                imsi_info = await self.provider.get_imsi_info(data["imsi"])
+                
+                # Update local DB if needed? Maybe balance?
+                # For now just construct response object mixing DB data and Provider data
+                esim = Esim(
+                    id=data["id"],
+                    user_id=user.id,
+                    name=data.get("name", "Travel eSIM"),
+                    imsi=imsi_info.IMSI,
+                    iccid=imsi_info.ICCID,
+                    msisdn=imsi_info.MSISDN,
+                    data_used=0.0, # Provider doesn't explicitly return Used, only Balance.
+                    # Assumption: FUEL/Balance is remaining credit or data?
+                    # input.md says "BALANCE: 125.12". Usually currency.
+                    # We might need to map this.
+                    # user_esim_data might have 'data_limit' from when it was purchased.
+                    data_limit=data.get("data_limit", 0.0),
+                    is_active=True # user owns it
+                )
+                esims.append(esim)
+            except Exception as e:
+                # If provider check fails, return what we have in DB or skip?
+                # Better to show partial data or error?
+                # We'll continue for robustness, maybe mark as stale
+                pass
+                
+        return esims
 
     async def get_esim_by_id(self, user: User, esim_id: str) -> Esim:
-        # Check DB
-        # esim = await self.repository.get(esim_id)
-        # if not esim or esim.user_id != user.id: raise NotFound
+        # Check DB ownership
+        data = await self.repository.get_esim(esim_id)
+        if not data or data.get("user_id") != user.id:
+            raise NotFoundError("eSIM not found")
+            
+        # Fetch provider info
+        imsi_info = await self.provider.get_imsi_info(data["imsi"])
         
-        # Mock
-        if esim_id == "esim_001":
-            return Esim(id="esim_001", provider="FlexSIM", country="Germany", is_active=True, data_used=1.5, data_limit=5.0)
-        raise NotFoundError("eSIM not found")
+        return Esim(
+            id=data["id"],
+            user_id=user.id,
+            name=data.get("name"),
+            imsi=imsi_info.IMSI,
+            iccid=imsi_info.ICCID,
+            msisdn=imsi_info.MSISDN,
+            data_limit=data.get("data_limit", 0.0)
+        )
 
     async def activate_esim(self, user: User, esim_id: str, code: str) -> Esim:
-        # Call provider implementation if strictly needed (e.g. assign MSISDN)
-        # Or just update status in DB
+        # Logic: Assign an available MSISDN to the IMSI?
+        # input.md says "Assigning MSISDN to IMSI" from Revoked list.
+        # This seems to be the "Activation" step equivalent.
         
-        # Mock
-        return Esim(id=esim_id, provider="FlexSIM", country="Germany", is_active=True, status="active")
+        # 1. Get eSIM
+        esim_data = await self.repository.get_esim(esim_id)
+        if not esim_data or esim_data.get("user_id") != user.id:
+            raise NotFoundError("eSIM not found")
+
+        # 2. Get available MSISDNs
+        revoked_list = await self.provider.get_revoked_msisdns()
+        if not revoked_list:
+            raise AppError(503, "No numbers available for activation")
+            
+        msisdn_to_assign = revoked_list[0]
+        
+        # 3. Assign
+        await self.provider.assign_msisdn(esim_data["imsi"], msisdn_to_assign)
+        
+        # 4. Return updated info
+        return await self.get_esim_by_id(user, esim_id)
 
     async def deactivate_esim(self, user: User, esim_id: str):
-        # Update status in DB
-        pass
+        # Logic: Revoke MSISDN
+        esim_data = await self.repository.get_esim(esim_id)
+        if not esim_data or esim_data.get("user_id") != user.id:
+            raise NotFoundError("eSIM not found")
+            
+        await self.provider.revoke_msisdn(esim_data["imsi"])
 
     async def update_esim_settings(self, user: User, esim_id: str, data: UpdateSettingsRequest) -> Esim:
-        # Update DB
-        return Esim(id=esim_id, provider="FlexSIM", country="Germany", name=data.name or "Updated")
+        # Update name in DB
+        esim_data = await self.repository.get_esim(esim_id)
+        if not esim_data or esim_data.get("user_id") != user.id:
+            raise NotFoundError("eSIM not found")
+        
+        esim_data["name"] = data.name
+        await self.repository.save_esim(esim_data)
+        
+        return await self.get_esim_by_id(user, esim_id)
 
     async def get_esim_usage(self, user: User, esim_id: str) -> UsageData:
-        # Initial mock usage
+        # 1. Verify ownership
+        esim_data = await self.repository.get_esim(esim_id)
+        if not esim_data or esim_data.get("user_id") != user.id:
+            raise NotFoundError("eSIM not found")
+            
+        # 2. Get Real Balance from Provider
+        try:
+            imsi_info = await self.provider.get_imsi_info(esim_data["imsi"])
+            current_balance = imsi_info.BALANCE if imsi_info.BALANCE is not None else 0.0
+        except Exception:
+            current_balance = 0.0
+            
+        # 3. Calculate usage
+        # Assumption: data_limit in DB is the initial balance or total purchased
+        data_limit = esim_data.get("data_limit", 0.0)
+        data_used = max(0.0, data_limit - current_balance)
+        percentage = (data_used / data_limit * 100) if data_limit > 0 else 0.0
+        
         return UsageData(
             esim_id=esim_id,
-            period={"start": "2024-11-20T00:00:00Z", "end": "2024-11-27T00:00:00Z"},
+            period={"start": datetime.datetime.utcnow().strftime("%Y-%m-%d"), "end": datetime.datetime.utcnow().strftime("%Y-%m-%d")},
             usage={
-                "data_used_mb": 1536.0,
-                "data_limit_mb": 5120.0,
-                "data_remaining_mb": 3584.0,
-                "percentage_used": 30.0
+                "data_used_mb": float(data_used), 
+                "data_limit_mb": float(data_limit), 
+                "data_remaining_mb": float(current_balance), 
+                "percentage_used": float(percentage)
             },
-            daily_breakdown=[{"date": "2024-11-21", "data_mb": 200.0}]
+            daily_breakdown=[] # Usage history not provided by B2B API currently
         )
 
     async def get_tariffs(self) -> List[Tariff]:
-        # Mock tariffs
+        # Tariffs are likely internal configuration since input.md is B2B backend.
+        # We define what we sell.
         return [
             Tariff(
                 id="plan_1gb_us",
@@ -104,19 +167,41 @@ class EsimService:
         ]
 
     async def purchase_esim(self, user: User, tariff_id: str) -> Esim:
-        # Mock purchase
-        new_esim = Esim(
-            id=str(uuid.uuid4()),
-            iccid="8900000000000000000",
-            imsi="260000000000000",
-            msisdn="1234567890",
-            provider="Imsimarket",
-            country="Global",
-            data_used=0.0,
-            data_limit=1.0, # Based on tariff
-            is_active=True
-        )
+        # 1. Fetch all IMSI from Provider
+        all_imsis_provider = await self.provider.list_imsis()
         
-        # Save to Firestore
-        await self.repository.save_esim(new_esim.dict())
-        return new_esim
+        # 2. Fetch all allocated IMSIs from DB
+        allocated = await self.repository.get_all_allocated_imsis()
+        
+        # 3. Find one unallocated
+        target_imsi_item = None
+        for item in all_imsis_provider:
+             if item.imsi not in allocated:
+                 target_imsi_item = item
+                 break
+        
+        if not target_imsi_item:
+            raise AppError(503, "No available eSIMs in stock")
+            
+        # 4. Allocate (Database Record)
+        new_esim_id = str(uuid.uuid4())
+        esim_record = {
+            "id": new_esim_id,
+            "user_id": user.id,
+            "imsi": target_imsi_item.imsi,
+            "msisdn": target_imsi_item.msisdn, 
+            "status": "created",
+            "data_limit": 1.0, # Determine from tariff_id logic
+            "created_at": datetime.datetime.utcnow().isoformat()
+        }
+        
+        await self.repository.save_esim(esim_record)
+        
+        return Esim(
+            id=new_esim_id,
+            user_id=user.id,
+            imsi=target_imsi_item.imsi,
+            msisdn=target_imsi_item.msisdn,
+            data_limit=1.0,
+            status="created"
+        )

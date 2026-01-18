@@ -41,7 +41,7 @@ class UsageData(BaseModel):
 class Esim(BaseModel):
     id: str
     name: Optional[str] = "Travel eSIM"
-    provider: str
+    provider: str = "Imsimarket"
     country: Optional[str] = "Global"
     region: Optional[str] = None
     is_active: bool = False
@@ -60,6 +60,9 @@ class Esim(BaseModel):
     iccid: Optional[str] = None
     imsi: Optional[str] = None
     msisdn: Optional[str] = None
+    
+    # New Field for allocation
+    user_id: Optional[str] = None
 
     class Config:
         from_attributes = True

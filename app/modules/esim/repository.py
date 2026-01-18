@@ -4,8 +4,11 @@ from typing import List, Optional
 
 class EsimRepository:
     def __init__(self):
-        self.db = get_db()
-        self.collection = self.db.collection("vink_sim_esims")
+        pass
+
+    @property
+    def collection(self):
+        return get_db().collection("vink_sim_esims")
 
     async def get_esim(self, esim_id: str) -> Optional[dict]:
         doc = self.collection.document(esim_id).get()
@@ -20,3 +23,8 @@ class EsimRepository:
         # Assuming we store user_id in the esim document
         docs = self.collection.where("user_id", "==", user_id).stream()
         return [doc.to_dict() for doc in docs]
+
+    async def get_all_allocated_imsis(self) -> List[str]:
+        # Get all esims that have an IMSI assigned
+        docs = self.collection.stream()
+        return [doc.to_dict().get("imsi") for doc in docs if doc.to_dict().get("imsi")]

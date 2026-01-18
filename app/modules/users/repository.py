@@ -4,8 +4,11 @@ from typing import Optional
 
 class UserRepository:
     def __init__(self):
-        self.db = get_db()
-        self.collection = self.db.collection("users")
+        pass
+
+    @property
+    def collection(self):
+        return get_db().collection("users")
 
     async def get_user(self, user_id: str) -> Optional[User]:
         doc = self.collection.document(user_id).get()

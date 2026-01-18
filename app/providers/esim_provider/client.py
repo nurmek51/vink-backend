@@ -51,8 +51,6 @@ class EsimProviderClient:
             "Authorization": f"Bearer {token}"
         }
         
-        # Используем limits с деактивированным IPv6, если это возможно через транспорт, 
-        # или просто добавим обработку и логирование.
         async with httpx.AsyncClient(timeout=10.0) as client:
             try:
                 if method == "GET":
@@ -80,25 +78,28 @@ class EsimProviderClient:
                 status_code = response.status_code if 'response' in locals() else 502
                 error_text = response.text if 'response' in locals() else str(e)
                 logger.error(f"Provider Request Failed: {e} | URL: {url} | Details: {error_text}")
+                # Sometimes 4xx errors return valid JSON body with error info
+                # We should propagate specific errors if possible
                 raise AppError(status_code, "Provider Error")
 
     async def get_balance(self) -> ImsiFuelResponse:
+        # Provider Endpoint: GET /fuel
         data = await self._request("GET", "/fuel")
-        # Handle potential string response if the API is weird as per doc examples
         if isinstance(data, str):
             data = json.loads(data)
         return ImsiFuelResponse(**data)
 
     async def get_imsi_info(self, imsi: str) -> ImsiInfoResponse:
+        # Provider Endpoint: GET /imsi/{imsi}
         data = await self._request("GET", f"/imsi/{imsi}")
+        # API Doc says: returns Dict stringified
         if isinstance(data, str):
             data = json.loads(data)
         return ImsiInfoResponse(**data)
 
     async def list_imsis(self) -> List[ImsiListItem]:
+        # Provider Endpoint: GET /list
         data = await self._request("GET", "/list")
-        # The response is {"email": [list]}
-        # We need to extract the list.
         if isinstance(data, str):
             try:
                 data = json.loads(data)
@@ -106,7 +107,6 @@ class EsimProviderClient:
                 logger.error(f"Failed to parse list response: {data}")
                 return []
         
-        # Flatten the values and convert to ImsiListItem
         all_imsis = []
         for key, value in data.items():
             if isinstance(value, list):
@@ -115,7 +115,6 @@ class EsimProviderClient:
                         if isinstance(item, dict):
                             all_imsis.append(ImsiListItem(**item))
                         elif isinstance(item, list) and len(item) >= 3:
-                            # Handling potential list of lists case based on AttributeError
                             all_imsis.append(ImsiListItem(
                                 imsi=str(item[0]),
                                 msisdn=str(item[1]),
@@ -125,14 +124,31 @@ class EsimProviderClient:
                         logger.error(f"Failed to parse IMSI item {item}: {e}")
         return all_imsis
 
+    async def top_up(self, imsi: str, amount: float) -> TopUpResponse:
+        # Provider Endpoint: GET /topup/{imsi}/{amount}
+        # Note: Doc says GET, usually POST for topup, but we strictly follow doc.
+        data = await self._request("GET", f"/topup/{imsi}/{amount}")
+        if isinstance(data, str):
+            data = json.loads(data)
+        return TopUpResponse(**data)
+
     async def get_revoked_msisdns(self) -> List[str]:
+        # Provider Endpoint: GET /revoked
         data = await self._request("GET", "/revoked")
         if isinstance(data, str):
             data = json.loads(data)
         return data
 
     async def assign_msisdn(self, imsi: str, msisdn: str) -> AssignResponse:
+        # Provider Endpoint: GET /assign/{imsi}/{msisdn}
         data = await self._request("GET", f"/assign/{imsi}/{msisdn}")
         if isinstance(data, str):
             data = json.loads(data)
         return AssignResponse(**data)
+    
+    async def revoke_msisdn(self, imsi: str) -> RevokeResponse:
+        # Provider Endpoint: GET /revoke/{imsi}
+        data = await self._request("GET", f"/revoke/{imsi}")
+        if isinstance(data, str):
+            data = json.loads(data)
+        return RevokeResponse(**data)
