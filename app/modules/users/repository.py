@@ -12,3 +12,12 @@ class UserRepository:
         if doc.exists:
             return User(**doc.to_dict())
         return None
+
+    async def update_user(self, user_id: str, data: dict) -> Optional[User]:
+        ref = self.collection.document(user_id)
+        ref.update(data)
+        doc = ref.get()
+        return User(**doc.to_dict())
+
+    async def delete_user(self, user_id: str):
+        self.collection.document(user_id).delete()
