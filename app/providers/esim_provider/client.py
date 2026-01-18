@@ -8,6 +8,7 @@ from app.common.exceptions import AppError
 from app.common.logging import logger
 from typing import List, Optional
 import json
+import time
 
 class EsimProviderClient:
     def __init__(self):
@@ -15,11 +16,13 @@ class EsimProviderClient:
         self.username = settings.IMSI_USERNAME
         self.password = settings.IMSI_PASSWORD
         self._token: Optional[str] = None
+        self._token_expires_at: Optional[float] = None
 
     async def _get_token(self) -> str:
-        if self._token:
-            # In a real app, check expiration
-            return self._token
+        # Check if token exists and is valid (with 60s buffer)
+        if self._token and self._token_expires_at:
+            if time.time() < (self._token_expires_at - 60):
+                return self._token
             
         async with httpx.AsyncClient() as client:
             try:
@@ -31,13 +34,16 @@ class EsimProviderClient:
                 response.raise_for_status()
                 data = response.json()
                 token_resp = ImsiTokenResponse(**data)
+                
                 self._token = token_resp.access_token
+                # Set expiration time (current time + expires_in)
+                self._token_expires_at = time.time() + token_resp.expires_in
                 return self._token
             except httpx.HTTPError as e:
                 logger.error(f"Provider Auth Failed: {e}")
                 raise AppError(503, "Provider unavailable")
 
-    async def _request(self, method: str, endpoint: str, data: dict = None) -> dict:
+    async def _request(self, method: str, endpoint: str, data: dict = None, retry_auth: bool = True) -> dict:
         token = await self._get_token()
         url = f"{self.base_url}{endpoint}"
         
@@ -56,6 +62,13 @@ class EsimProviderClient:
                 else:
                     raise ValueError(f"Unsupported method {method}")
                 
+                # Retrieve new token if unauthorized
+                if response.status_code == 401 and retry_auth:
+                    logger.warning(f"Provider Token Expired (401). Retrying request: {url}")
+                    self._token = None
+                    self._token_expires_at = 0
+                    return await self._request(method, endpoint, data, retry_auth=False)
+
                 response.raise_for_status()
                 
                 try:
