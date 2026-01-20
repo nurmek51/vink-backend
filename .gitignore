@@ -107,6 +107,7 @@ venv.bak/
 .cursorrules
 input.md
 vink-server-documentation.md
+API_INTEGRATION.md
 
 # mypy
 .mypy_cache/
