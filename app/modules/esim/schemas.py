@@ -11,10 +11,6 @@ class Tariff(BaseModel):
     duration_days: int
     countries: List[str]
 
-class PurchaseRequest(BaseModel):
-    tariff_id: str
-    payment_data: Optional[dict] = None
-
 class TopUpEsimRequest(BaseModel):
     amount: float
 
@@ -43,7 +39,7 @@ class UsageData(BaseModel):
 
 class Esim(BaseModel):
     id: str
-    name: Optional[str] = "Travel eSIM"
+    name: Optional[str] = "Vink eSIM"
     provider: str = "Imsimarket"
     country: Optional[str] = "Global"
     region: Optional[str] = None

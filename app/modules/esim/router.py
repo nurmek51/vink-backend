@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from app.modules.esim.service import EsimService
 from app.modules.esim.schemas import (
-    Esim, Tariff, PurchaseRequest, ActivateRequest, 
+    Esim, Tariff, ActivateRequest, 
     UpdateSettingsRequest, UsageData, TopUpEsimRequest
 )
 from app.core.dependencies import get_current_user, require_app_permission
@@ -70,8 +70,7 @@ async def get_tariffs(
 
 @router.post("/esims/purchase", response_model=DataResponse[Esim])
 async def purchase_esim(
-    request: PurchaseRequest,
     current_user: User = Depends(require_app_permission("vink-sim"))
 ):
-    esim = await service.purchase_esim(current_user, request.tariff_id)
+    esim = await service.purchase_esim(current_user)
     return DataResponse(data=esim)

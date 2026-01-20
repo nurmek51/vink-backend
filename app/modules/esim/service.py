@@ -45,7 +45,7 @@ class EsimService:
             esim = Esim(
                 id=data["id"],
                 user_id=user.id,
-                name=data.get("name", "Travel eSIM"),
+                name=data.get("name", "Vink eSIM"),
                 imsi=data["imsi"],
                 iccid=imsi_info.ICCID if imsi_info else data.get("iccid"),
                 msisdn=imsi_info.MSISDN if imsi_info else data.get("msisdn"),
@@ -229,17 +229,17 @@ class EsimService:
             )
         ]
 
-    async def purchase_esim(self, user: User, tariff_id: str) -> Esim:
-        # 1. Validate Tariff
+    async def purchase_esim(self, user: User) -> Esim:
         # EXPLANATION: Based on user clarification, IMSIs are pre-funded for initial purchase.
+        # This endpoint assigns the first available (unallocated) IMSI to the user.
         
-        # 2. Fetch all IMSI from Provider ("Master Profile" full list)
+        # 1. Fetch all IMSI from Provider ("Master Profile" full list)
         all_imsis_provider = await self.provider.list_imsis()
         
-        # 3. Fetch all allocated IMSIs from DB
+        # 2. Fetch all allocated IMSIs from DB
         allocated = await self.repository.get_all_allocated_imsis()
         
-        # 4. Find one unallocated (exclusive allocation logic)
+        # 3. Find one unallocated (exclusive allocation logic)
         target_imsi_item = None
         for item in all_imsis_provider:
              if item.imsi not in allocated:
@@ -249,14 +249,11 @@ class EsimService:
         if not target_imsi_item:
             raise AppError(503, "No available eSIMs in stock")
         
-        # Get Tariff details for local limit
-        # In a real app, fetch from DB. Mocking lookup here based on ID.
-        data_limit = 1.0
-        if "5gb" in tariff_id:
-            data_limit = 5.0
-            
-        # 5. Allocate (Database Record)
+        # 4. Allocate (Database Record)
         new_esim_id = str(uuid.uuid4())
+        
+        # Use balance from provider as initial data_limit if available
+        data_limit = getattr(target_imsi_item, "balance", 0.0)
         
         # QUESTION: Where is QR code? Using placeholder as per previous notes.
         qr_code = "LPA:1$smdp.example.com$UNKNOWN"
@@ -269,7 +266,7 @@ class EsimService:
             "msisdn": target_imsi_item.msisdn, 
             "status": "created",
             "data_limit": data_limit,
-            "name": f"Travel eSIM {target_imsi_item.imsi[-4:]}",
+            "name": f"Vink eSIM {target_imsi_item.imsi[-4:]}",
             "qr_code": qr_code,
             "activation_code": activation_code,
             "created_at": datetime.datetime.utcnow().isoformat()
