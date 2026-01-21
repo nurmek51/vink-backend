@@ -25,8 +25,8 @@ class EsimRepository:
         return [doc.to_dict() for doc in docs]
 
     async def get_all_allocated_imsis(self) -> List[str]:
-        # Get all esims that have an IMSI assigned
-        docs = self.collection.stream()
+        # Get all esims that have an IMSI assigned and a user_id
+        docs = self.collection.where("user_id", "!=", None).stream()
         return [doc.to_dict().get("imsi") for doc in docs if doc.to_dict().get("imsi")]
 
     async def get_esim_by_imsi(self, imsi: str) -> Optional[dict]:

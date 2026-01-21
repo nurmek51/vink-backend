@@ -7,6 +7,8 @@ from app.common.exceptions import NotFoundError, ForbiddenError, AppError
 from typing import List
 import uuid
 import datetime
+import json
+import os
 
 class EsimService:
     def __init__(self):
@@ -206,28 +208,27 @@ class EsimService:
         )
 
     async def get_tariffs(self) -> List[Tariff]:
-        # Tariffs are likely internal configuration since input.md is B2B backend.
-        # We define what we sell.
-        return [
-            Tariff(
-                id="plan_1gb_us",
-                name="1GB USA",
-                data_amount=1.0,
-                price=5.0,
-                currency="USD",
-                duration_days=7,
-                countries=["US"]
-            ),
-            Tariff(
-                id="plan_5gb_eu",
-                name="5GB Europe",
-                data_amount=5.0,
-                price=15.0,
-                currency="USD",
-                duration_days=30,
-                countries=["FR", "DE", "IT", "ES"]
-            )
-        ]
+        # Parse tariffs from alternative_rates.json
+        # These represent the different network rates available
+        rates_path = os.path.join(os.getcwd(), "alternative_rates.json")
+        try:
+            with open(rates_path, "r") as f:
+                rates_data = json.load(f)
+            
+            tariffs = []
+            for rate in rates_data:
+                tariffs.append(
+                    Tariff(
+                        plmn=rate.get("PLMN"),
+                        network_name=rate.get("NetworkName"),
+                        country_name=rate.get("CountryName"),
+                        data_rate=rate.get("DataRate")
+                    )
+                )
+            return tariffs
+        except Exception as e:
+            # If rate file is missing or invalid, return empty list
+            return []
 
     async def purchase_esim(self, user: User) -> Esim:
         # EXPLANATION: Based on user clarification, IMSIs are pre-funded for initial purchase.
@@ -248,39 +249,65 @@ class EsimService:
         
         if not target_imsi_item:
             raise AppError(503, "No available eSIMs in stock")
+
+        # Fetch ICCID to store it
+        iccid = None
+        try:
+             imsi_info = await self.provider.get_imsi_info(target_imsi_item.imsi)
+             iccid = imsi_info.ICCID
+        except Exception:
+             pass
         
         # 4. Allocate (Database Record)
-        new_esim_id = str(uuid.uuid4())
+        # Check if we already have a record for this IMSI (e.g. it was unassigned before)
+        existing_record = await self.repository.get_esim_by_imsi(target_imsi_item.imsi)
         
-        # Use balance from provider as initial data_limit if available
-        data_limit = getattr(target_imsi_item, "balance", 0.0)
+        if existing_record:
+            # Update existing record
+            esim_id = existing_record["id"]
+            existing_record["user_id"] = user.id
+            existing_record["status"] = "allocated"
+            if iccid:
+                existing_record["iccid"] = iccid
+            existing_record["updated_at"] = datetime.datetime.utcnow().isoformat()
+            await self.repository.save_esim(existing_record)
+        else:
+            # Create new record
+            esim_id = str(uuid.uuid4())
+            data_limit = getattr(target_imsi_item, "balance", 0.0)
+            
+            # Using placeholders for QR/Activation as before
+            qr_code = "LPA:1$smdp.example.com$UNKNOWN"
+            activation_code = "UNKNOWN"
+            
+            esim_record = {
+                "id": esim_id,
+                "user_id": user.id,
+                "imsi": target_imsi_item.imsi,
+                "iccid": iccid,
+                "msisdn": target_imsi_item.msisdn, 
+                "status": "allocated",
+                "data_limit": data_limit,
+                "name": f"Vink eSIM {target_imsi_item.imsi[-4:]}",
+                "qr_code": qr_code,
+                "activation_code": activation_code,
+                "created_at": datetime.datetime.utcnow().isoformat()
+            }
+            await self.repository.save_esim(esim_record)
         
-        # QUESTION: Where is QR code? Using placeholder as per previous notes.
-        qr_code = "LPA:1$smdp.example.com$UNKNOWN"
-        activation_code = "UNKNOWN"
+        # Return object (map from DB record might be safer)
+        final_data = await self.repository.get_esim(esim_id)
+        return Esim(**final_data)
+
+    async def unassign_imsi_admin(self, imsi: str):
+        # 1. Verify existence of this IMSI in DB
+        esim_data = await self.repository.get_esim_by_imsi(imsi)
+        if not esim_data:
+            raise NotFoundError("IMSI mapping not found in database")
+
+        # 2. Nullify relation and update status
+        esim_data["user_id"] = None
+        esim_data["status"] = "free"
+        esim_data["updated_at"] = datetime.datetime.utcnow().isoformat()
         
-        esim_record = {
-            "id": new_esim_id,
-            "user_id": user.id,
-            "imsi": target_imsi_item.imsi,
-            "msisdn": target_imsi_item.msisdn, 
-            "status": "created",
-            "data_limit": data_limit,
-            "name": f"Vink eSIM {target_imsi_item.imsi[-4:]}",
-            "qr_code": qr_code,
-            "activation_code": activation_code,
-            "created_at": datetime.datetime.utcnow().isoformat()
-        }
-        
-        await self.repository.save_esim(esim_record)
-        
-        return Esim(
-            id=new_esim_id,
-            user_id=user.id,
-            imsi=target_imsi_item.imsi,
-            msisdn=target_imsi_item.msisdn,
-            data_limit=data_limit,
-            status="created",
-            qr_code=qr_code,
-            activation_code=activation_code
-        )
+        await self.repository.save_esim(esim_data)

@@ -3,19 +3,22 @@ from typing import List, Optional
 from datetime import datetime
 
 class Tariff(BaseModel):
-    id: str
-    name: str
-    data_amount: float
-    price: float
-    currency: str
-    duration_days: int
-    countries: List[str]
+    plmn: str = Field(..., description="Public Land Mobile Network identifier, unique code for each operator (e.g., AFGTD)")
+    network_name: str = Field(..., description="The name of the mobile network operator (e.g., Roshan Afghanistan)")
+    country_name: str = Field(..., description="The country where the network operates (e.g., Afghanistan)")
+    data_rate: float = Field(..., description="The cost per MB of data usage in the specified network")
+
+    class Config:
+        from_attributes = True
 
 class TopUpEsimRequest(BaseModel):
     amount: float
 
 class ActivateRequest(BaseModel):
     activation_code: str
+
+class UnassignImsiRequest(BaseModel):
+    imsi: str
 
 class UpdateSettingsRequest(BaseModel):
     name: Optional[str] = None

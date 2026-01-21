@@ -30,6 +30,7 @@ class UserService:
             "imsi": [
                 {
                     "imsi": e.imsi,
+                    "iccid": e.iccid,
                     "balance": e.provider_balance,
                     "country": e.country,
                     "iso": "DE", 

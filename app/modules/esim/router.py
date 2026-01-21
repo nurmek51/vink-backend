@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends
 from app.modules.esim.service import EsimService
 from app.modules.esim.schemas import (
     Esim, Tariff, ActivateRequest, 
-    UpdateSettingsRequest, UsageData, TopUpEsimRequest
+    UpdateSettingsRequest, UsageData, TopUpEsimRequest,
+    UnassignImsiRequest
 )
-from app.core.dependencies import get_current_user, require_app_permission
+from app.core.dependencies import get_current_user, require_app_permission, require_admin_api_key
 from app.modules.users.schemas import User
 from app.common.responses import DataResponse, ResponseBase
 from typing import List
@@ -74,3 +75,11 @@ async def purchase_esim(
 ):
     esim = await service.purchase_esim(current_user)
     return DataResponse(data=esim)
+
+@router.post("/esims/unassign")
+async def unassign_imsi(
+    request: UnassignImsiRequest,
+    _admin_key: str = Depends(require_admin_api_key)
+):
+    await service.unassign_imsi_admin(request.imsi)
+    return ResponseBase()

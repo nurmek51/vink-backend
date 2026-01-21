@@ -1,5 +1,5 @@
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends, HTTPException, status, Header
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
 from jose import JWTError, jwt
 from app.core.config import settings
 from app.core.jwt import decode_token
@@ -29,6 +29,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     return user
 
 from datetime import datetime
+import hashlib
 
 def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
     # Add logic to check if user is active if needed
@@ -40,3 +41,11 @@ def require_app_permission(app_name: str):
             raise ForbiddenError(f"User does not have access to {app_name}")
         return current_user
     return _require_app_permission
+
+X_API_KEY = APIKeyHeader(name="X-Admin-API-Key", auto_error=True)
+
+def require_admin_api_key(api_key: str = Depends(X_API_KEY)):
+    api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+    if api_key_hash != settings.ADMIN_API_KEY_HASH:
+        raise ForbiddenError("Invalid Admin API Key")
+    return api_key
