@@ -6,6 +6,7 @@ from app.modules.esim.schemas import (
     UnassignImsiRequest
 )
 from app.core.dependencies import get_current_user, require_app_permission, require_admin_api_key
+from app.core.jwt import decode_token
 from app.modules.users.schemas import User
 from app.common.responses import DataResponse, ResponseBase
 from typing import List

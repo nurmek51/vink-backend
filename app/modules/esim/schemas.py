@@ -43,31 +43,20 @@ class UsageData(BaseModel):
 class Esim(BaseModel):
     id: str
     name: Optional[str] = "Vink eSIM"
-    provider: str = "Imsimarket"
-    country: Optional[str] = "Global"
-    region: Optional[str] = None
-    is_active: bool = False
-    data_used: float = 0.0
-    data_limit: float = 0.0
-    activation_date: Optional[datetime] = None
-    qr_code: Optional[str] = None
-    activation_code: Optional[str] = None
-    provider_balance: Optional[float] = 0.0 # Carry numeric balance from provider
-    expiration_date: Optional[datetime] = None
-    status: str = "active"
-    qr_code: Optional[str] = None
-    activation_code: Optional[str] = None
-    price: float = 0.0
-    currency: str = "USD"
-    supported_networks: List[str] = []
-
-    # Internal fields mapping to Provider
+    user_id: Optional[str] = None
     iccid: Optional[str] = None
     imsi: Optional[str] = None
     msisdn: Optional[str] = None
-    
-    # New Field for allocation
-    user_id: Optional[str] = None
+    is_active: bool = False
+    status: Optional[str] = "active"
+    country: Optional[str] = "Global"
+    provider: str = "Vink"
+    current_rate: Optional[float] = None
+    data_used: float = 0.0
+    data_limit: float = 0.0
+    provider_balance: Optional[float] = 0.0
+    qr_code: Optional[str] = None
+    activation_code: Optional[str] = None
 
     class Config:
         from_attributes = True

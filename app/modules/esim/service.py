@@ -1,23 +1,65 @@
 from app.modules.esim.repository import EsimRepository
 from app.providers.esim_provider.client import EsimProviderClient
-from app.providers.esim_provider.mapper import map_imsi_to_esim
 from app.modules.esim.schemas import Esim, Tariff, ActivateRequest, UpdateSettingsRequest, UsageData
 from app.modules.users.schemas import User
 from app.common.exceptions import NotFoundError, ForbiddenError, AppError
-from typing import List
+from app.common.mcc_codes import get_country_by_mcc
+from app.common.logging import logger
+from typing import List, Optional, Dict
+import httpx
 import uuid
 import datetime
 import json
 import os
+import time
 
 class EsimService:
     def __init__(self):
         self.repository = EsimRepository()
         self.provider = EsimProviderClient()
+        self._rates_cache: List[Tariff] = []
+        self._rates_last_updated = 0.0
+
+    async def _fetch_rates(self) -> List[Tariff]:
+        # Update cache if older than 1 hour (3600 seconds)
+        if self._rates_cache and (time.time() - self._rates_last_updated < 3600):
+            return self._rates_cache
+
+        url = "https://imsimarket.com/js/data/alternative.rates.json"
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(url)
+                response.raise_for_status()
+                data = response.json()
+                
+                tariffs = []
+                for rate in data:
+                    tariffs.append(
+                        Tariff(
+                            plmn=rate.get("PLMN"),
+                            network_name=rate.get("NetworkName"),
+                            country_name=rate.get("CountryName"),
+                            data_rate=float(rate.get("DataRate", 0.0))
+                        )
+                    )
+                
+                self._rates_cache = tariffs
+                self._rates_last_updated = time.time()
+                return tariffs
+            except Exception as e:
+                logger.error(f"Failed to fetch tariffs: {e}")
+                # Return cached outdated or empty if fails
+                return self._rates_cache
+
+    async def get_tariffs(self) -> List[Tariff]:
+        return await self._fetch_rates()
 
     async def get_user_esims(self, user: User) -> List[Esim]:
         # 1. Get allocated IMSIs from DB
         user_esims_data = await self.repository.get_user_esims(user.id)
+        
+        # Prefetch rates once
+        all_tariffs = await self.get_tariffs()
         
         esims = []
         for data in user_esims_data:
@@ -26,23 +68,36 @@ class EsimService:
                 # 2. Sync with Provider "Master Profile" data
                 imsi_info = await self.provider.get_imsi_info(data["imsi"])
             except Exception:
-                # If provider fails, we rely on DB or skip? 
-                # Better to show what we have in DB to not block user
                 pass
 
-            # QUESTION: input.md does not provide SMDP+ Address or Activation Code (QR data) in ImsiInfo.
-            # However, the App requires 'qr' and 'activationCode' to install the eSIM.
-            # I am filling these with placeholders. Please clarify source of SMDP data.
             qr_code = data.get("qr_code", "LPA:1$smdp.example.com$UNKNOWN")
             activation_code = data.get("activation_code", "UNKNOWN")
 
-            # Map Provider Balance to Data Used/Remaining logic
-            # input.md says 'BALANCE' is available. 
-            # We assume 'data_limit' is what user bought (e.g. 5.0 GB or $5.00).
-            # If BALANCE is numeric, we store it.
             provider_balance = 0.0
-            if imsi_info and imsi_info.BALANCE is not None:
-                provider_balance = float(imsi_info.BALANCE)
+            last_mcc = None
+            if imsi_info:
+                if imsi_info.BALANCE is not None:
+                    provider_balance = float(imsi_info.BALANCE)
+                last_mcc = getattr(imsi_info, "LASTMCC", None)
+                
+                # Sync ICCID if missing or different in DB
+                if imsi_info.ICCID and data.get("iccid") != imsi_info.ICCID:
+                    data["iccid"] = imsi_info.ICCID
+                    data["msisdn"] = imsi_info.MSISDN
+                    await self.repository.save_esim(data)
+
+            # Map MCC to Country and find best rate
+            country_name = "Global"
+            current_rate = None
+            
+            if last_mcc:
+                mapped_country = get_country_by_mcc(int(last_mcc))
+                if mapped_country != "Unknown":
+                    country_name = mapped_country
+                    # Find min rate for this country
+                    country_rates = [t.data_rate for t in all_tariffs if t.country_name == country_name]
+                    if country_rates:
+                        current_rate = min(country_rates)
 
             esim = Esim(
                 id=data["id"],
@@ -56,7 +111,10 @@ class EsimService:
                 is_active=bool(imsi_info.MSISDN if imsi_info else data.get("msisdn")), 
                 qr_code=qr_code,
                 activation_code=activation_code,
-                provider_balance=provider_balance
+                provider_balance=provider_balance,
+                country=country_name,
+                provider="Vink",
+                current_rate=current_rate
             )
             esims.append(esim)
                 
@@ -71,20 +129,38 @@ class EsimService:
         # Fetch provider info
         imsi_info = await self.provider.get_imsi_info(data["imsi"])
 
-        # QUESTION: Same as above re: QR/SMDP
         qr_code = data.get("qr_code", "LPA:1$smdp.example.com$UNKNOWN")
         activation_code = data.get("activation_code", "UNKNOWN")
+        
+        last_mcc = getattr(imsi_info, "LASTMCC", None)
+        country_name = "Global"
+        current_rate = None
+        
+        if last_mcc:
+            mapped_country = get_country_by_mcc(int(last_mcc))
+            if mapped_country != "Unknown":
+                country_name = mapped_country
+                # Use cached tariffs
+                all_tariffs = await self.get_tariffs()
+                country_rates = [t.data_rate for t in all_tariffs if t.country_name == country_name]
+                if country_rates:
+                    current_rate = min(country_rates)
         
         return Esim(
             id=data["id"],
             user_id=user.id,
             name=data.get("name"),
-            imsi=imsi_info.IMSI,
-            iccid=imsi_info.ICCID,
-            msisdn=imsi_info.MSISDN,
+            imsi=imsi_info.IMSI if imsi_info else data.get("imsi"),
+            iccid=imsi_info.ICCID if imsi_info else data.get("iccid"),
+            msisdn=imsi_info.MSISDN if imsi_info else data.get("msisdn"),
             data_limit=data.get("data_limit", 0.0),
+            provider_balance=float(imsi_info.BALANCE) if imsi_info and imsi_info.BALANCE is not None else 0.0,
+            data_used=max(0.0, data.get("data_limit", 0.0) - (float(imsi_info.BALANCE) if imsi_info and imsi_info.BALANCE is not None else 0.0)),
             qr_code=qr_code,
-            activation_code=activation_code
+            activation_code=activation_code,
+            country=country_name,
+            provider="Vink",
+            current_rate=current_rate
         )
 
     async def activate_esim(self, user: User, esim_id: str, code: str) -> Esim:
@@ -207,28 +283,6 @@ class EsimService:
             daily_breakdown=[] # Usage history not provided by B2B API currently
         )
 
-    async def get_tariffs(self) -> List[Tariff]:
-        # Parse tariffs from alternative_rates.json
-        # These represent the different network rates available
-        rates_path = os.path.join(os.getcwd(), "alternative_rates.json")
-        try:
-            with open(rates_path, "r") as f:
-                rates_data = json.load(f)
-            
-            tariffs = []
-            for rate in rates_data:
-                tariffs.append(
-                    Tariff(
-                        plmn=rate.get("PLMN"),
-                        network_name=rate.get("NetworkName"),
-                        country_name=rate.get("CountryName"),
-                        data_rate=rate.get("DataRate")
-                    )
-                )
-            return tariffs
-        except Exception as e:
-            # If rate file is missing or invalid, return empty list
-            return []
 
     async def purchase_esim(self, user: User) -> Esim:
         # EXPLANATION: Based on user clarification, IMSIs are pre-funded for initial purchase.
@@ -269,6 +323,7 @@ class EsimService:
             existing_record["status"] = "allocated"
             if iccid:
                 existing_record["iccid"] = iccid
+            existing_record["provider"] = "Vink"
             existing_record["updated_at"] = datetime.datetime.utcnow().isoformat()
             await self.repository.save_esim(existing_record)
         else:
@@ -289,6 +344,7 @@ class EsimService:
                 "status": "allocated",
                 "data_limit": data_limit,
                 "name": f"Vink eSIM {target_imsi_item.imsi[-4:]}",
+                "provider": "Vink",
                 "qr_code": qr_code,
                 "activation_code": activation_code,
                 "created_at": datetime.datetime.utcnow().isoformat()

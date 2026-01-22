@@ -7,10 +7,11 @@ def map_imsi_to_esim(imsi_item: ImsiListItem) -> Esim:
         iccid="UNKNOWN", # List endpoint doesn't return ICCID
         imsi=imsi_item.imsi,
         msisdn=imsi_item.msisdn,
-        provider="Imsimarket",
         country="Global", # Default
+        provider="Vink",
+        provider_balance=imsi_item.balance,
         data_used=0.0, # Not provided
-        data_limit=10.0, # Mock limit
+        data_limit=imsi_item.balance, 
         is_active=True
     )
 
@@ -20,8 +21,9 @@ def map_imsi_info_to_esim(info: ImsiInfoResponse) -> Esim:
         iccid=info.ICCID,
         imsi=info.IMSI,
         msisdn=info.MSISDN,
-        provider="Imsimarket",
         country=str(info.LASTMCC) if info.LASTMCC else "Global",
+        provider="Vink",
+        provider_balance=float(info.BALANCE) if info.BALANCE is not None else 0.0,
         data_used=0.0,
         data_limit=10.0,
         is_active=True

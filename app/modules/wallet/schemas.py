@@ -1,6 +1,4 @@
 from pydantic import BaseModel
 
-class Wallet(BaseModel):
-    id: str
-    balance: float
-    currency: str
+# Wallet schema was unused in current implementation
+# Retaining file structure as requested.

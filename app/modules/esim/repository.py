@@ -1,5 +1,4 @@
 from app.infrastructure.firestore import get_db
-from app.modules.esim.schemas import Esim
 from typing import List, Optional
 
 class EsimRepository:

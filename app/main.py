@@ -8,6 +8,7 @@ from app.modules.users.router import router as users_router
 from app.modules.esim.router import router as esim_router
 from app.modules.wallet.router import router as wallet_router
 from app.infrastructure.firestore import init_firestore
+import asyncio
 
 setup_logging()
 
@@ -19,7 +20,7 @@ app = FastAPI(
 @app.on_event("startup")
 async def startup_event():
     init_firestore()
-
+    
 @app.exception_handler(AppError)
 async def app_error_handler(request: Request, exc: AppError):
     return JSONResponse(

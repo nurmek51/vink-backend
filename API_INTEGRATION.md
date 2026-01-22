@@ -5,8 +5,8 @@
 This document provides comprehensive API integration details for the VinkSIM application.
 Use this as a reference when integrating the real backend API.
 
-**Current Status:** Backend returning 503 - Using Mock Data
-**Mock Data Location:** `lib/core/mock/mock_data.dart`
+**Current Status:** Backend Ready
+**Mock Data Location:** `lib/core/mock/mock_data.dart` (Client side)
 
 ---
 
@@ -16,7 +16,7 @@ Use this as a reference when integrating the real backend API.
 
 | Environment | URL                                    |
 |-------------|----------------------------------------|
-| Development | `https://dev-api.flextravelsim.com`    |
+| Development | `http://localhost:8000/api/v1`         |
 | Production  | From `Environment.apiUrl` (.env file)  |
 
 ### Authentication
@@ -26,6 +26,25 @@ All authenticated endpoints require:
 Authorization: Bearer <jwt_token>
 Content-Type: application/json
 Accept: application/json
+```
+
+### Response Format Wrapper
+
+Most successful data responses are wrapped in a standard structure:
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": { ... }
+}
+```
+
+Empty successful responses (actions etc):
+```json
+{
+  "success": true,
+  "message": "Success"
+}
 ```
 
 ---
@@ -41,7 +60,7 @@ Accept: application/json
 **Request:**
 ```json
 {
-  "phone": "+1234567890"
+  "phone_number": "+1234567890"
 }
 ```
 
@@ -50,15 +69,11 @@ Accept: application/json
 {
   "success": true,
   "message": "OTP sent successfully",
-  "expires_in": 300
+  "meta": {
+      "expires_in": 300
+  }
 }
 ```
-
-**Mock Implementation:** `lib/core/mock/mock_data.dart` → `MockAuthData.otpSendResponse`
-
-**Data Source:** `OtpAuthDataSourceImpl.sendOtpSms()`
-
----
 
 #### 1.2 Verify OTP
 
@@ -67,34 +82,29 @@ Accept: application/json
 **Request:**
 ```json
 {
-  "phone": "+1234567890",
-  "code": "123456"
+  "phone_number": "+1234567890",
+  "otp_code": "123456"
 }
 ```
 
 **Response (200):**
 ```json
 {
-  "token": "jwt_token_here",
-  "user_id": "user_001",
-  "firebase_custom_token": "firebase_token_here"
+  "success": true,
+  "message": "Authentication successful",
+  "data": {
+    "access_token": "jwt_token_here",
+    "token_type": "bearer",
+    "expires_in": 3600,
+    "user_id": "user_id_here",
+    "firebase_custom_token": "firebase_token_here_if_applicable"
+  }
 }
 ```
-
-**Mock Implementation:** `MockAuthData.otpVerifyResponse`
-
-**Data Source:** `OtpAuthDataSourceImpl.verifyOtp()`
-
----
 
 #### 1.3 Login by Email
 
 **Endpoint:** `POST /api/login/by-email`
-
-**Headers:**
-```
-Authorization: Basic base64(LOGIN_PASSWORD)
-```
 
 **Request:**
 ```json
@@ -106,15 +116,14 @@ Authorization: Basic base64(LOGIN_PASSWORD)
 **Response (200):**
 ```json
 {
-  "token": "jwt_token_here"
+  "success": true,
+  "message": "Success",
+  "data": {
+    "token": "jwt_token_here"
+  }
 }
 ```
 
-**Mock Implementation:** Returns mock token for phone credentials
-
-**Data Source:** `AuthRemoteDataSourceImpl.login()`
-
----
 
 #### 1.4 Confirm Login
 
@@ -128,11 +137,13 @@ Authorization: Basic base64(LOGIN_PASSWORD)
 }
 ```
 
-**Response (200):** Empty body (success)
-
-**Mock Implementation:** Always returns success after 500ms delay
-
-**Data Source:** `ConfirmRemoteDataSourceImpl.confirm()`
+**Response (200):**
+```json
+{
+  "success": true,
+  "message": "Success"
+}
+```
 
 ---
 
@@ -148,6 +159,7 @@ Authorization: Bearer <token>
 ```
 
 **Response (200):**
+*Note: This endpoint returns a direct dictionary object, not wrapped in `data`.*
 ```json
 {
   "balance": 50.00,
@@ -158,7 +170,7 @@ Authorization: Bearer <token>
       "balance": 25.00,
       "country": "Germany",
       "iso": "DE",
-      "brand": "VinkSIM",
+      "brand": "Imsimarket",
       "rate": 0.05,
       "qr": "LPA:1$smdp.example.com$ACTIVATION_CODE",
       "smdpServer": "smdp.example.com",
@@ -167,10 +179,6 @@ Authorization: Bearer <token>
   ]
 }
 ```
-
-**Mock Implementation:** `MockSubscriberData.subscriberJson`
-
-**Data Source:** `SubscriberRemoteDataSourceImpl.getSubscriberInfo()`
 
 ---
 
@@ -183,6 +191,8 @@ Authorization: Bearer <token>
 **Response (200):**
 ```json
 {
+  "success": true,
+  "message": "Success",
   "data": {
     "id": "user_001",
     "email": "test@example.com",
@@ -198,16 +208,11 @@ Authorization: Bearer <token>
     "is_phone_verified": true,
     "preferred_language": "en",
     "preferred_currency": "USD",
-    "favorite_countries": ["US", "GB", "DE"]
+    "favorite_countries": ["US", "GB", "DE"],
+    "apps_enabled": ["vink", "vink-sim"]
   }
 }
 ```
-
-**Mock Implementation:** `MockUserData.currentUserJson`
-
-**Data Source:** `UserRemoteDataSourceImpl.getCurrentUser()`
-
----
 
 #### 3.2 Update User Profile
 
@@ -223,13 +228,7 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response (200):** Same as Get Current User
-
-**Mock Implementation:** Returns updated user with merged fields
-
-**Data Source:** `UserRemoteDataSourceImpl.updateUserProfile()`
-
----
+**Response (200):** Same as Get Current User (Wrapped in DataResponse)
 
 #### 3.3 Top Up Balance
 
@@ -238,17 +237,12 @@ Authorization: Bearer <token>
 **Request:**
 ```json
 {
-  "amount": 25.00
+  "amount": 25.00,
+  "imsi": "optional_imsi_to_top_up_directly"
 }
 ```
 
-**Response (200):** Empty body (success)
-
-**Mock Implementation:** Returns success
-
-**Data Source:** `UserRemoteDataSourceImpl.updateBalance()`
-
----
+**Response (200):** Standard Success Response
 
 #### 3.4 Get Balance History
 
@@ -257,6 +251,8 @@ Authorization: Bearer <token>
 **Response (200):**
 ```json
 {
+  "success": true,
+  "message": "Success",
   "data": {
     "transactions": [
       {
@@ -275,21 +271,11 @@ Authorization: Bearer <token>
 }
 ```
 
-**Mock Implementation:** `MockUserData.balanceHistory`
-
-**Data Source:** `UserRemoteDataSourceImpl.getBalanceHistory()`
-
----
-
 #### 3.5 Delete User
 
 **Endpoint:** `DELETE /user/profile`
 
-**Response (200):** Empty body (success)
-
-**Data Source:** `UserRemoteDataSourceImpl.deleteUser()`
-
----
+**Response (200):** Standard Success Response
 
 #### 3.6 Change Password
 
@@ -303,15 +289,11 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response (200):** Empty body (success)
+**Response (200):** Standard Success Response
 
-**Data Source:** `UserRemoteDataSourceImpl.changePassword()`
+#### 3.7 Verify Email / Phone
 
----
-
-#### 3.7 Verify Email
-
-**Endpoint:** `POST /user/verify-email`
+**Endpoint:** `POST /user/verify-email` or `POST /user/verify-phone`
 
 **Request:**
 ```json
@@ -320,30 +302,9 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response (200):** Empty body (success)
+**Response (200):** Standard Success Response
 
-**Data Source:** `UserRemoteDataSourceImpl.verifyEmail()`
-
----
-
-#### 3.8 Verify Phone
-
-**Endpoint:** `POST /user/verify-phone`
-
-**Request:**
-```json
-{
-  "verification_code": "123456"
-}
-```
-
-**Response (200):** Empty body (success)
-
-**Data Source:** `UserRemoteDataSourceImpl.verifyPhone()`
-
----
-
-#### 3.9 Upload Avatar
+#### 3.8 Upload Avatar
 
 **Endpoint:** `POST /user/avatar`
 
@@ -354,9 +315,7 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response (200):** Same as Get Current User
-
-**Data Source:** `UserRemoteDataSourceImpl.uploadAvatar()`
+**Response (200):** Same as Get Current User (Wrapped in DataResponse)
 
 ---
 
@@ -369,54 +328,36 @@ Authorization: Bearer <token>
 **Response (200):**
 ```json
 {
+  "success": true,
+  "message": "Success",
   "data": [
     {
       "id": "esim_001",
       "name": "Germany Travel eSIM",
-      "provider": "VinkSIM",
+      "provider": "Imsimarket",
       "country": "Germany",
-      "region": "Europe",
+      "iso": "DE",
       "is_active": true,
       "data_used": 1.5,
       "data_limit": 5.0,
       "activation_date": "2024-11-24T10:00:00Z",
-      "expiration_date": "2024-12-24T10:00:00Z",
       "status": "active",
-      "qr_code": "LPA:1$smdp.example.com$CODE",
-      "activation_code": "ACTIVATION_CODE",
-      "price": 15.00,
+      "price": 0.0,
       "currency": "USD",
-      "supported_networks": ["Vodafone", "T-Mobile", "O2"]
+      "rate": 0.05,
+      "imsi": "26001...",
+      "iccid": "89...",
+      "msisdn": "161..."
     }
   ]
 }
 ```
 
-**Mock Implementation:** `MockEsimData.esimListJson`
-
-**Data Source:** `EsimRemoteDataSourceImpl.getEsims()`
-
----
-
 #### 4.2 Get eSIM by ID
 
 **Endpoint:** `GET /esims/{id}`
 
-**Response (200):**
-```json
-{
-  "data": {
-    "id": "esim_001",
-    ...
-  }
-}
-```
-
-**Mock Implementation:** `MockEsimData.getEsimById(id)`
-
-**Data Source:** `EsimRemoteDataSourceImpl.getEsimById()`
-
----
+**Response (200):** Single eSIM object wrapped in DataResponse.
 
 #### 4.3 Activate eSIM
 
@@ -429,45 +370,15 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response (200):** eSIM object with status="active"
+**Response (200):** eSIM object wrapped in DataResponse.
 
-**Data Source:** `EsimRemoteDataSourceImpl.activateEsim()`
-
----
-
-#### 4.4 Purchase eSIM
-
-**Endpoint:** `POST /esims/purchase`
-
-**Request:**
-```json
-{
-  "tariff_id": "tariff_001",
-  "payment_data": {
-    "payment_method_id": "pm_001",
-    "amount": 15.00,
-    "currency": "USD"
-  }
-}
-```
-
-**Response (200):** New eSIM object
-
-**Data Source:** `EsimRemoteDataSourceImpl.purchaseEsim()`
-
----
-
-#### 4.5 Deactivate eSIM
+#### 4.4 Deactivate eSIM
 
 **Endpoint:** `POST /esims/{id}/deactivate`
 
-**Response (200):** Empty body (success)
+**Response (200):** Standard Success Response
 
-**Data Source:** `EsimRemoteDataSourceImpl.deactivateEsim()`
-
----
-
-#### 4.6 Update eSIM Settings
+#### 4.5 Update eSIM Settings
 
 **Endpoint:** `PUT /esims/{id}/settings`
 
@@ -479,24 +390,22 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response (200):** Updated eSIM object
+**Response (200):** eSIM object wrapped in DataResponse.
 
-**Data Source:** `EsimRemoteDataSourceImpl.updateEsimSettings()`
-
----
-
-#### 4.7 Get eSIM Usage Data
+#### 4.6 Get eSIM Usage Data
 
 **Endpoint:** `GET /esims/{id}/usage`
 
 **Response (200):**
 ```json
 {
+  "success": true,
+  "message": "Success",
   "data": {
     "esim_id": "esim_001",
     "period": {
-      "start": "2024-11-20T00:00:00Z",
-      "end": "2024-11-27T00:00:00Z"
+      "start": "2026-01-22",
+      "end": "2026-01-22"
     },
     "usage": {
       "data_used_mb": 1536.0,
@@ -504,40 +413,51 @@ Authorization: Bearer <token>
       "data_remaining_mb": 3584.0,
       "percentage_used": 30.0
     },
-    "daily_breakdown": [
-      {"date": "2024-11-21", "data_mb": 200.0}
-    ]
+    "daily_breakdown": []
   }
 }
 ```
 
-**Mock Implementation:** `MockEsimData.getUsageData(id)`
+#### 4.7 Get Tariffs
 
-**Data Source:** `EsimRemoteDataSourceImpl.getEsimUsageData()`
-
----
-
-### 5. Tariffs API (External)
-
-#### 5.1 Get Network Operators
-
-**Endpoint:** `GET https://imsimarket.com/js/data/alternative.rates.json`
+**Endpoint:** `GET /tariffs`
 
 **Response (200):**
 ```json
-[
-  {
-    "PLMN": "26201",
-    "NetworkName": "Telekom",
-    "CountryName": "Germany",
-    "DataRate": 0.05
-  }
-]
+{
+  "success": true,
+  "message": "Success",
+  "data": [
+    {
+      "plmn": "26201",
+      "network_name": "Telekom",
+      "country_name": "Germany",
+      "data_rate": 0.05
+    }
+  ]
+}
 ```
 
-**Mock Implementation:** `MockTariffsData.networkOperators`
+#### 4.8 Purchase eSIM
 
-**Data Source:** `TariffsRemoteDataSourceImpl.getNetworkOperators()`
+**Endpoint:** `POST /esims/purchase`
+
+**Request:** (Empty Body)
+
+**Response (200):** New eSIM object wrapped in DataResponse.
+
+#### 4.9 Unassign IMSI (Admin)
+
+**Endpoint:** `POST /esims/unassign`
+
+**Request:**
+```json
+{
+  "imsi": "26001..."
+}
+```
+
+**Response (200):** Standard Success Response
 
 ---
 
@@ -545,93 +465,13 @@ Authorization: Bearer <token>
 
 All endpoints may return these error responses:
 
-### 400 Bad Request
+### 400 Bad Request / 401 Unauthorized / 404 Not Found / 500 Server Error
+
 ```json
 {
-  "message": "Validation error description"
+  "error": {
+      "message": "Description of the error",
+      "code": 400
+  }
 }
 ```
-
-### 401 Unauthorized
-```json
-{
-  "message": "Invalid or expired token"
-}
-```
-
-### 404 Not Found
-```json
-{
-  "message": "Resource not found"
-}
-```
-
-### 500+ Server Error
-```json
-{
-  "message": "Internal server error"
-}
-```
-
----
-
-## Mock Mode Toggle
-
-To switch between mock and real API:
-
-1. **In `MockConfig` class:**
-```dart
-static bool useMockData = true;  // Set to false for real API
-```
-
-2. **Or check at runtime:**
-```dart
-if (MockConfig.useMockData) {
-  // Return mock data
-} else {
-  // Make real API call
-}
-```
-
----
-
-## Files Modified for Mock Integration
-
-| File | Purpose | Changes |
-|------|---------|---------|
-| `lib/core/mock/mock_data.dart` | Central mock data | NEW FILE |
-| `lib/core/network/travel_sim_api_service.dart` | Main API service | Added mock fallback |
-| `lib/features/auth/data/data_sources/otp_auth_data_source.dart` | OTP handling | Added mock fallback |
-| `lib/features/subscriber/data/data_sources/subscriber_remote_data_source.dart` | Subscriber info | Added mock fallback |
-| `lib/features/esim_management/data/data_sources/esim_remote_data_source.dart` | eSIM operations | Added mock fallback |
-| `lib/features/user_account/data/data_sources/user_remote_data_source.dart` | User profile | Added mock fallback |
-
----
-
-## Testing Mock Data
-
-### Default Test Credentials
-- **Phone:** Any phone number works
-- **OTP Code:** `123456` (MockConfig.defaultOtpCode)
-- **User:** Pre-configured John Doe user
-
-### Test eSIMs
-- **esim_001:** Active Germany eSIM (1.5GB/5GB used)
-- **esim_002:** Pending UK eSIM
-- **esim_003:** Pending Japan eSIM
-
-### Test Balance
-- **Starting balance:** $50.00
-- **IMSI cards:** 3 (Germany, UK, Japan)
-
----
-
-## Integration Checklist
-
-When backend is ready, update these files:
-
-- [ ] Remove `MockConfig.useMockData = true` or set to `false`
-- [ ] Update `.env` with production API URL
-- [ ] Test all API endpoints
-- [ ] Remove mock fallback code (optional)
-- [ ] Update error handling if API response format changes
