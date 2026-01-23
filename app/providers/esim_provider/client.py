@@ -204,39 +204,48 @@ class EsimProviderClient:
                     return []
 
                 results = []
-                csv_file = io.StringIO(content)
-                reader = csv.DictReader(csv_file)
                 
-                # Check field names
-                logger.info(f"CSV Fieldnames found: {reader.fieldnames}")
-                
-                rows_processed = 0
-                match_count = 0
-                
-                for row in reader:
-                    rows_processed += 1
+                try:
+                    data = json.loads(content)
+                    snapshot_list = data.get("esims_snapshot_list", [])
+                    logger.info(f"Parsed JSON successfully. Found {len(snapshot_list)} items.")
                     
-                    # Clean up keys: strip whitespace from headers
-                    row_clean = {k.strip(): v for k, v in row.items() if k}
+                    for item in snapshot_list:
+                        iccid = item.get("ICCID")
+                        activation_code = item.get("ACTIVATION_CODE")
+                        
+                        if iccid and activation_code:
+                            results.append({
+                                "iccid": iccid,
+                                "activation_code": activation_code
+                            })
                     
-                    if rows_processed == 1:
-                        logger.info(f"First row keys cleaned: {list(row_clean.keys())}")
-
-                    iccid = row_clean.get("ICCID")
-                    activation_code = row_clean.get("ACTIVATION CODE")
+                    logger.info(f"Valid records extracted: {len(results)}")
+                    return results
                     
-                    if iccid and activation_code:
-                        results.append({
-                            "iccid": iccid,
-                            "activation_code": activation_code
-                        })
-                        match_count += 1
-                    elif rows_processed <= 3:
-                        # Log first few failures to understand why
-                        logger.warning(f"Row {rows_processed} skipped. Missing 'ICCID' or 'ACTIVATION CODE'. Keys: {list(row_clean.keys())}")
-                
-                logger.info(f"Total rows processed: {rows_processed}. Valid records extracted: {match_count}")
-                return results
+                except json.JSONDecodeError:
+                    # Fallback to CSV if JSON parsing fails (just in case provider toggles format)
+                    logger.warning("JSON Decode failed, attempting CSV fallback...")
+                    csv_file = io.StringIO(content)
+                    reader = csv.DictReader(csv_file)
+                    
+                    rows_processed = 0
+                    
+                    for row in reader:
+                        rows_processed += 1
+                        row_clean = {k.strip(): v for k, v in row.items() if k}
+                        
+                        iccid = row_clean.get("ICCID")
+                        activation_code = row_clean.get("ACTIVATION CODE")
+                        
+                        if iccid and activation_code:
+                            results.append({
+                                "iccid": iccid,
+                                "activation_code": activation_code
+                            })
+                    
+                    logger.info(f"CSV Parse: Rows processed: {rows_processed}. Valid records: {len(results)}")
+                    return results
 
             except httpx.HTTPError as e:
                 logger.error(f"Provider Snapshot Failed: {e}")
