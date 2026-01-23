@@ -21,6 +21,13 @@ async def get_esims(
     esims = await service.get_user_esims(current_user)
     return DataResponse(data=esims)
 
+@router.get("/esims/unassigned", response_model=DataResponse[List[Esim]])
+async def get_unassigned_esims(
+    _admin_key: str = Depends(require_admin_api_key)
+):
+    esims = await service.get_unassigned_esims()
+    return DataResponse(data=esims)
+
 @router.get("/esims/{id}", response_model=DataResponse[Esim])
 async def get_esim_by_id(
     id: str,

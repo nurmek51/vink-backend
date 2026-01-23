@@ -348,6 +348,46 @@ class EsimService:
         # 5. Return fully populated eSIM info (consistent with detailed view)
         return await self.get_esim_by_id(user, esim_id)
 
+    async def get_unassigned_esims(self) -> List[Esim]:
+        # 1. Fetch all IMSI from Provider
+        all_imsis_provider = await self.provider.list_imsis()
+        
+        # 2. Fetch all allocated IMSIs from DB
+        allocated_imsis = await self.repository.get_all_allocated_imsis()
+        
+        # 3. Fetch all unassigned records from DB (those already known but not allocated)
+        db_unassigned = await self.repository.get_unassigned_esims()
+        db_unassigned_map = {item["imsi"]: item for item in db_unassigned}
+        
+        # 4. Filter unallocated and map to Esim objects
+        results = []
+        for item in all_imsis_provider:
+             if item.imsi not in allocated_imsis:
+                 db_record = db_unassigned_map.get(item.imsi)
+                 if db_record:
+                     results.append(Esim(
+                         id=db_record["id"],
+                         imsi=db_record["imsi"],
+                         iccid=db_record.get("iccid"),
+                         msisdn=db_record.get("msisdn") or item.msisdn,
+                         data_limit=db_record.get("data_limit", 0.0) or item.balance,
+                         provider_balance=item.balance,
+                         status="free",
+                         activation_code=db_record.get("activation_code"),
+                         provider="Vink"
+                     ))
+                 else:
+                     results.append(Esim(
+                         id=f"free-{item.imsi}",
+                         imsi=item.imsi,
+                         msisdn=item.msisdn,
+                         data_limit=item.balance,
+                         provider_balance=item.balance,
+                         status="free",
+                         provider="Vink"
+                     ))
+        return results
+
     async def unassign_imsi_admin(self, imsi: str):
         # 1. Verify existence of this IMSI in DB
         esim_data = await self.repository.get_esim_by_imsi(imsi)

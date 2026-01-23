@@ -28,6 +28,11 @@ class EsimRepository:
         docs = self.collection.where("user_id", "!=", None).stream()
         return [doc.to_dict().get("imsi") for doc in docs if doc.to_dict().get("imsi")]
 
+    async def get_unassigned_esims(self) -> List[dict]:
+        # Get all esims that have no user_id assigned
+        docs = self.collection.where("user_id", "==", None).stream()
+        return [doc.to_dict() for doc in docs]
+
     async def update_activation_code_by_iccid(self, iccid: str, activation_code: str) -> bool:
         docs = self.collection.where("iccid", "==", iccid).limit(1).stream()
         found = False
