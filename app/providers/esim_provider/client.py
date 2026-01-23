@@ -6,9 +6,11 @@ from app.providers.esim_provider.schemas import (
 )
 from app.common.exceptions import AppError
 from app.common.logging import logger
-from typing import List, Optional
+from typing import List, Optional, Dict
 import json
 import time
+import csv
+import io
 
 class EsimProviderClient:
     def __init__(self):
@@ -159,3 +161,55 @@ class EsimProviderClient:
         if isinstance(data, str):
             data = json.loads(data)
         return RevokeResponse(**data)
+
+    async def fetch_esim_snapshots(self) -> List[Dict[str, str]]:
+        """
+        Fetches eSIM snapshot CSV and returns a list of dictionaries with ICCID and ACTIVATION CODE.
+        """
+        token = await self._get_token()
+        url = f"{self.base_url}/esimssnapshot"
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            try:
+                response = await client.get(url, headers=headers)
+                
+                if response.status_code == 401:
+                    logger.warning("Provider Token Expired (401) during snapshot. Retrying...")
+                    self._token = None
+                    self._token_expires_at = 0
+                    token = await self._get_token()
+                    headers["Authorization"] = f"Bearer {token}"
+                    response = await client.get(url, headers=headers)
+
+                response.raise_for_status()
+
+                content = response.text
+                if not content:
+                    return []
+
+                results = []
+                csv_file = io.StringIO(content)
+                reader = csv.DictReader(csv_file)
+                
+                for row in reader:
+                    row_clean = {k.strip(): v for k, v in row.items() if k}
+                    iccid = row_clean.get("ICCID")
+                    activation_code = row_clean.get("ACTIVATION CODE")
+                    
+                    if iccid and activation_code:
+                        results.append({
+                            "iccid": iccid,
+                            "activation_code": activation_code
+                        })
+                
+                return results
+
+            except httpx.HTTPError as e:
+                logger.error(f"Provider Snapshot Failed: {e}")
+                raise AppError(503, "Failed to fetch eSIM snapshot from provider")
+            except Exception as e:
+                logger.error(f"Snapshot Parsing Error: {e}")
+                raise AppError(500, "Failed to parse provider response")

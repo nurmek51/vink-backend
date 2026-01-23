@@ -35,9 +35,7 @@ class UserService:
                     "country": e.country,
                     "iso": "DE", 
                     "brand": e.provider,
-                    "rate": 0.05,
-                    "qr": e.qr_code,
-                    "smdpServer": "smdp.example.com",
+                    "rate": e.current_rate or 0.0,
                     "activationCode": e.activation_code
                 } for e in esims
             ]

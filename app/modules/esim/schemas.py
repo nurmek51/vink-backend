@@ -55,7 +55,6 @@ class Esim(BaseModel):
     data_used: float = 0.0
     data_limit: float = 0.0
     provider_balance: Optional[float] = 0.0
-    qr_code: Optional[str] = None
     activation_code: Optional[str] = None
 
     class Config:

@@ -70,7 +70,6 @@ class EsimService:
             except Exception:
                 pass
 
-            qr_code = data.get("qr_code", "LPA:1$smdp.example.com$UNKNOWN")
             activation_code = data.get("activation_code", "UNKNOWN")
 
             provider_balance = 0.0
@@ -109,7 +108,6 @@ class EsimService:
                 data_used=max(0.0, data.get("data_limit", 0.0) - provider_balance), 
                 data_limit=data.get("data_limit", 0.0),
                 is_active=bool(imsi_info.MSISDN if imsi_info else data.get("msisdn")), 
-                qr_code=qr_code,
                 activation_code=activation_code,
                 provider_balance=provider_balance,
                 country=country_name,
@@ -129,7 +127,6 @@ class EsimService:
         # Fetch provider info
         imsi_info = await self.provider.get_imsi_info(data["imsi"])
 
-        qr_code = data.get("qr_code", "LPA:1$smdp.example.com$UNKNOWN")
         activation_code = data.get("activation_code", "UNKNOWN")
         
         last_mcc = getattr(imsi_info, "LASTMCC", None)
@@ -156,7 +153,6 @@ class EsimService:
             data_limit=data.get("data_limit", 0.0),
             provider_balance=float(imsi_info.BALANCE) if imsi_info and imsi_info.BALANCE is not None else 0.0,
             data_used=max(0.0, data.get("data_limit", 0.0) - (float(imsi_info.BALANCE) if imsi_info and imsi_info.BALANCE is not None else 0.0)),
-            qr_code=qr_code,
             activation_code=activation_code,
             country=country_name,
             provider="Vink",
@@ -331,8 +327,7 @@ class EsimService:
             esim_id = str(uuid.uuid4())
             data_limit = getattr(target_imsi_item, "balance", 0.0)
             
-            # Using placeholders for QR/Activation as before
-            qr_code = "LPA:1$smdp.example.com$UNKNOWN"
+            # Using placeholders for Activation as before
             activation_code = "UNKNOWN"
             
             esim_record = {
@@ -345,15 +340,13 @@ class EsimService:
                 "data_limit": data_limit,
                 "name": f"Vink eSIM {target_imsi_item.imsi[-4:]}",
                 "provider": "Vink",
-                "qr_code": qr_code,
                 "activation_code": activation_code,
                 "created_at": datetime.datetime.utcnow().isoformat()
             }
             await self.repository.save_esim(esim_record)
         
-        # Return object (map from DB record might be safer)
-        final_data = await self.repository.get_esim(esim_id)
-        return Esim(**final_data)
+        # 5. Return fully populated eSIM info (consistent with detailed view)
+        return await self.get_esim_by_id(user, esim_id)
 
     async def unassign_imsi_admin(self, imsi: str):
         # 1. Verify existence of this IMSI in DB
@@ -367,3 +360,21 @@ class EsimService:
         esim_data["updated_at"] = datetime.datetime.utcnow().isoformat()
         
         await self.repository.save_esim(esim_data)
+
+    async def sync_activation_codes(self) -> dict:
+        snapshots = await self.provider.fetch_esim_snapshots()
+        updated_count = 0
+        total_found = len(snapshots)
+        
+        for item in snapshots:
+            iccid = item.get("iccid")
+            activation_code = item.get("activation_code")
+            if iccid and activation_code:
+                updated = await self.repository.update_activation_code_by_iccid(iccid, activation_code)
+                if updated:
+                    updated_count += 1
+        
+        return {
+            "total_provider_records": total_found,
+            "updated_local_records": updated_count
+        }

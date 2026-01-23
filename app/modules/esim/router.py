@@ -84,3 +84,10 @@ async def unassign_imsi(
 ):
     await service.unassign_imsi_admin(request.imsi)
     return ResponseBase()
+
+@router.post("/esims/internal/sync-activation-codes")
+async def sync_esim_activation_codes(
+    _admin_key: str = Depends(require_admin_api_key)
+):
+    result = await service.sync_activation_codes()
+    return DataResponse(data=result)

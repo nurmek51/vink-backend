@@ -28,6 +28,16 @@ class EsimRepository:
         docs = self.collection.where("user_id", "!=", None).stream()
         return [doc.to_dict().get("imsi") for doc in docs if doc.to_dict().get("imsi")]
 
+    async def update_activation_code_by_iccid(self, iccid: str, activation_code: str) -> bool:
+        docs = self.collection.where("iccid", "==", iccid).limit(1).stream()
+        found = False
+        for doc in docs:
+            # We assume unique ICCID, so we update the first one found
+            doc.reference.update({"activation_code": activation_code})
+            found = True
+        return found
+
+
     async def get_esim_by_imsi(self, imsi: str) -> Optional[dict]:
         docs = self.collection.where("imsi", "==", imsi).limit(1).stream()
         for doc in docs:
