@@ -171,6 +171,8 @@ class EsimProviderClient:
         headers = {
             "Authorization": f"Bearer {token}"
         }
+        
+        logger.info(f"Fetching snapshots from: {url}")
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
@@ -184,18 +186,42 @@ class EsimProviderClient:
                     headers["Authorization"] = f"Bearer {token}"
                     response = await client.get(url, headers=headers)
 
-                response.raise_for_status()
+                logger.info(f"Snapshot status: {response.status_code}")
+                
+                if response.status_code != 200:
+                     logger.error(f"Snapshot request failed. Body: {response.text[:200]}")
+                     response.raise_for_status()
 
                 content = response.text
+                logger.info(f"Snapshot content length: {len(content)}")
+                if len(content) < 1000:
+                    logger.info(f"Snapshot preview: {content}")
+                else:
+                    logger.info(f"Snapshot preview (first 500 chars): {content[:500]}")
+
                 if not content:
+                    logger.warning("Snapshot content is empty.")
                     return []
 
                 results = []
                 csv_file = io.StringIO(content)
                 reader = csv.DictReader(csv_file)
                 
+                # Check field names
+                logger.info(f"CSV Fieldnames found: {reader.fieldnames}")
+                
+                rows_processed = 0
+                match_count = 0
+                
                 for row in reader:
+                    rows_processed += 1
+                    
+                    # Clean up keys: strip whitespace from headers
                     row_clean = {k.strip(): v for k, v in row.items() if k}
+                    
+                    if rows_processed == 1:
+                        logger.info(f"First row keys cleaned: {list(row_clean.keys())}")
+
                     iccid = row_clean.get("ICCID")
                     activation_code = row_clean.get("ACTIVATION CODE")
                     
@@ -204,7 +230,12 @@ class EsimProviderClient:
                             "iccid": iccid,
                             "activation_code": activation_code
                         })
+                        match_count += 1
+                    elif rows_processed <= 3:
+                        # Log first few failures to understand why
+                        logger.warning(f"Row {rows_processed} skipped. Missing 'ICCID' or 'ACTIVATION CODE'. Keys: {list(row_clean.keys())}")
                 
+                logger.info(f"Total rows processed: {rows_processed}. Valid records extracted: {match_count}")
                 return results
 
             except httpx.HTTPError as e:
@@ -212,4 +243,7 @@ class EsimProviderClient:
                 raise AppError(503, "Failed to fetch eSIM snapshot from provider")
             except Exception as e:
                 logger.error(f"Snapshot Parsing Error: {e}")
+                # Also log stack trace if possible or at least the error
+                import traceback
+                logger.error(traceback.format_exc())
                 raise AppError(500, "Failed to parse provider response")
