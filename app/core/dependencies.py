@@ -44,8 +44,13 @@ def require_app_permission(app_name: str):
 
 X_API_KEY = APIKeyHeader(name="X-Admin-API-Key", auto_error=True)
 
-def require_admin_api_key(api_key: str = Depends(X_API_KEY)):
-    api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-    if api_key_hash != settings.ADMIN_API_KEY_HASH:
-        raise ForbiddenError("Invalid Admin API Key")
-    return api_key
+def require_admin_api_key(api_key: str = Depends(X_API_KEY)):    
+    # 2. Check if the provided key is already the correct hash
+    if api_key == settings.ADMIN_API_KEY_HASH:
+        return api_key
+        
+    # 3. Check if the hash of the provided key matches the stored ADMIN_API_KEY_HASH
+    if hashlib.sha256(api_key.encode()).hexdigest() == settings.ADMIN_API_KEY_HASH:
+        return api_key
+        
+    raise UnauthorizedError("Invalid Admin API Key")

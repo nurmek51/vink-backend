@@ -21,8 +21,10 @@ class Settings(BaseSettings):
     # Mock OTP
     MOCK_OTP_CODE: str = "123456"
     
+    # Admin API Key
+    ADMIN_API_KEY: str = "nurmekadminapi!"
     # Admin API Key (SHA-256 hash)
-    ADMIN_API_KEY_HASH: str = "941ca676050c99429ad77bf8b8f796ce8036ee98fb185b0d6c0d2834a3eb4b2f"
+    ADMIN_API_KEY_HASH: str = "35b801e69c7fef51490614f09ffd50818a35d18260072eabccc65882aaa77eac"
     
     class Config:
         env_file = ".env"
