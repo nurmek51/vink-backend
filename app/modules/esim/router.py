@@ -71,9 +71,7 @@ async def get_esim_usage(
     return DataResponse(data=usage)
 
 @router.get("/tariffs", response_model=DataResponse[List[Tariff]])
-async def get_tariffs(
-    current_user: User = Depends(require_app_permission("vink-sim"))
-):
+async def get_tariffs():
     tariffs = await service.get_tariffs()
     return DataResponse(data=tariffs)
 
