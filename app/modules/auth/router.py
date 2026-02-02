@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, status
 from app.modules.auth.schemas import (
-    OTPRequest, OTPVerify, Token, LoginRequest, LoginConfirmRequest, TokenResponse
+    OTPRequest, OTPVerify, Token
 )
 from app.modules.auth.service import AuthService
 from app.common.responses import ResponseBase, DataResponse

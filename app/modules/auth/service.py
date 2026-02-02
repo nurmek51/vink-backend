@@ -1,5 +1,5 @@
 from app.modules.auth.repository import AuthRepository
-from app.modules.auth.schemas import OTPRequest, OTPVerify, Token, LoginConfirmRequest
+from app.modules.auth.schemas import OTPRequest, OTPVerify, Token
 from app.modules.users.schemas import UserCreate
 from app.core.jwt import create_access_token
 from app.common.exceptions import UnauthorizedError

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from app.modules.users.service import UserService
 from app.modules.users.schemas import (
     User, UserUpdate, 
-    ChangePasswordRequest, VerifyRequest, AvatarUploadRequest
+    VerifyRequest, AvatarUploadRequest
 )
 from app.modules.wallet.schemas import BalanceTopUpRequest, BalanceHistoryResponse
 from app.core.dependencies import get_current_user
