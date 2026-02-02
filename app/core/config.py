@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "nurmek-vink-dev"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8  # 8 days
+    BACKEND_CORS_ORIGINS: List[str] = [
+        "https://vink-sim.vercel.app",
+        "http://localhost:3000",
+    ]
     
     # Firebase
     FIREBASE_CREDENTIALS_PATH: str = "vink-testik.json"
