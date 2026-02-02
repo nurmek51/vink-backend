@@ -1,16 +1,14 @@
 from app.modules.esim.repository import EsimRepository
 from app.providers.esim_provider.client import EsimProviderClient
-from app.modules.esim.schemas import Esim, Tariff, ActivateRequest, UpdateSettingsRequest, UsageData
+from app.modules.esim.schemas import Esim, Tariff, UpdateSettingsRequest, UsageData
 from app.modules.users.schemas import User
-from app.common.exceptions import NotFoundError, ForbiddenError, AppError
+from app.common.exceptions import NotFoundError, AppError
 from app.common.mcc_codes import get_country_by_mcc
 from app.common.logging import logger
-from typing import List, Optional, Dict
+from typing import List
 import httpx
 import uuid
 import datetime
-import json
-import os
 import time
 
 class EsimService:

@@ -1,5 +1,7 @@
 from app.modules.users.repository import UserRepository
-from app.modules.users.schemas import User, UserUpdate, BalanceHistoryResponse, Transaction
+from app.modules.users.schemas import User, UserUpdate
+from app.modules.wallet.service import WalletService
+from app.modules.wallet.schemas import BalanceHistoryResponse
 from app.common.exceptions import NotFoundError, AppError
 from datetime import datetime
 from typing import Optional
@@ -8,7 +10,7 @@ import uuid
 class UserService:
     def __init__(self):
         self.repository = UserRepository()
-        # lazy load to avoid circular import if necessary
+        self.wallet_service = WalletService()
 
     async def get_profile(self, user_id: str) -> User:
         user = await self.repository.get_user(user_id)
@@ -17,7 +19,7 @@ class UserService:
         return user
 
     async def get_subscriber_info(self, user: User) -> dict:
-        # Use local import to avoid circular dependency
+        # Use local import to avoid circular dependency if EsimService imports UserService
         from app.modules.esim.service import EsimService
         esim_service = EsimService()
         
@@ -59,38 +61,22 @@ class UserService:
             # Delegate to EsimService
             from app.modules.esim.service import EsimService
             esim_service = EsimService()
-            # This method in EsimService should just handle the provider call
             await esim_service.top_up_esim_by_imsi(user, imsi, amount)
             
             # Deduct from Wallet
             new_balance = user.balance - amount
             await self.repository.update_user(user_id, {"balance": new_balance})
             
-            await self._log_transaction(user_id, "esim_top_up", amount, description=f"Top Up IMSI {imsi}")
+            await self.wallet_service.log_transaction(user_id, "esim_top_up", amount, description=f"Top Up IMSI {imsi}")
             
         else:
             # Case 2: User Wallet Top-Up (Deposit funds)
-            # Implementation depends on payment gateway integration (mocked here as direct add)
             new_balance = user.balance + amount
             await self.repository.update_user(user_id, {"balance": new_balance})
-            await self._log_transaction(user_id, "top_up", amount, description="Wallet Deposit")
+            await self.wallet_service.log_transaction(user_id, "top_up", amount, description="Wallet Deposit")
 
     async def get_balance_history(self, user_id: str) -> BalanceHistoryResponse:
-        # Fetch from DB
-        transactions = await self.repository.get_transactions(user_id)
-        
-        total_top_up = sum(t.amount for t in transactions if t.type == "top_up")
-        total_spent = sum(t.amount for t in transactions if t.type != "top_up")
-        
-        return BalanceHistoryResponse(
-            transactions=transactions,
-            total_top_up=total_top_up,
-            total_spent=total_spent
-        )
-
-    async def change_password(self, user_id: str, old_pass: str, new_pass: str):
-        # ... implementation ...
-        pass 
+        return await self.wallet_service.get_balance_history(user_id)
 
     async def verify_email(self, user_id: str, code: str):
         if code == "123456":

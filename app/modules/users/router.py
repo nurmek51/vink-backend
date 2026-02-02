@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, Query
 from app.modules.users.service import UserService
 from app.modules.users.schemas import (
-    User, UserUpdate, BalanceTopUpRequest, BalanceHistoryResponse, 
+    User, UserUpdate, 
     ChangePasswordRequest, VerifyRequest, AvatarUploadRequest
 )
+from app.modules.wallet.schemas import BalanceTopUpRequest, BalanceHistoryResponse
 from app.core.dependencies import get_current_user
 from app.common.responses import DataResponse, ResponseBase
 from typing import Dict, Any
@@ -47,14 +48,6 @@ async def top_up_balance(
 async def get_balance_history(current_user: User = Depends(get_current_user)):
     history = await service.get_balance_history(current_user.id)
     return DataResponse(data=history)
-
-@router.post("/user/change-password")
-async def change_password(
-    request: ChangePasswordRequest,
-    current_user: User = Depends(get_current_user)
-):
-    await service.change_password(current_user.id, request.old_password, request.new_password)
-    return ResponseBase()
 
 @router.post("/user/verify-email")
 async def verify_email(

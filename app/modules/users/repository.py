@@ -1,35 +1,35 @@
 from app.infrastructure.firestore import get_db
 from app.modules.users.schemas import User
 from typing import Optional
+import anyio
 
 class UserRepository:
     def __init__(self):
-        pass
+        self._db = None
+
+    @property
+    def db(self):
+        if self._db is None:
+            self._db = get_db()
+        return self._db
 
     @property
     def collection(self):
-        return get_db().collection("users")
+        return self.db.collection("users")
 
     async def get_user(self, user_id: str) -> Optional[User]:
-        doc = self.collection.document(user_id).get()
+        doc_ref = self.collection.document(user_id)
+        doc = await anyio.to_thread.run_sync(doc_ref.get)
         if doc.exists:
             return User(**doc.to_dict())
         return None
 
     async def update_user(self, user_id: str, data: dict) -> Optional[User]:
         ref = self.collection.document(user_id)
-        ref.update(data)
-        doc = ref.get()
+        await anyio.to_thread.run_sync(ref.update, data)
+        doc = await anyio.to_thread.run_sync(ref.get)
         return User(**doc.to_dict())
 
     async def delete_user(self, user_id: str):
-        self.collection.document(user_id).delete()
-
-    async def add_transaction(self, user_id: str, transaction: 'Transaction'):
-        # Subcollection "transactions" under user document
-        self.collection.document(user_id).collection("transactions").document(transaction.id).set(transaction.dict())
-
-    async def get_transactions(self, user_id: str) -> list['Transaction']:
-        from app.modules.users.schemas import Transaction
-        docs = self.collection.document(user_id).collection("transactions").order_by("date", direction="DESCENDING").stream()
-        return [Transaction(**doc.to_dict()) for doc in docs]
+        ref = self.collection.document(user_id)
+        await anyio.to_thread.run_sync(ref.delete)

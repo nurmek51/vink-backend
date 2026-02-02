@@ -6,6 +6,7 @@ T = TypeVar("T")
 class ResponseBase(BaseModel):
     success: bool = True
     message: str = "Success"
+    meta: Optional[dict] = None
 
 class DataResponse(ResponseBase, Generic[T]):
     data: Optional[T] = None

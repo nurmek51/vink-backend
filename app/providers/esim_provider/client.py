@@ -2,7 +2,7 @@ import httpx
 from app.core.config import settings
 from app.providers.esim_provider.schemas import (
     ImsiTokenResponse, ImsiFuelResponse, ImsiInfoResponse, 
-    ImsiListResponse, ImsiListItem, TopUpResponse, RevokeResponse, AssignResponse
+    ImsiListItem, TopUpResponse, RevokeResponse, AssignResponse
 )
 from app.common.exceptions import AppError
 from app.common.logging import logger

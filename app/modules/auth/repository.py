@@ -2,16 +2,26 @@ from app.infrastructure.firestore import get_db
 from app.modules.users.schemas import User, UserCreate
 from datetime import datetime
 import uuid
+import anyio
 
 class AuthRepository:
     def __init__(self):
-        self.db = get_db()
-        self.collection = self.db.collection("users")
+        self._db = None
+
+    @property
+    def db(self):
+        if self._db is None:
+            self._db = get_db()
+        return self._db
+
+    @property
+    def collection(self):
+        return self.db.collection("users")
 
     async def get_user_by_phone(self, phone_number: str):
-        # Firestore query
-        users_ref = self.collection.where("phone_number", "==", phone_number).limit(1).stream()
-        for doc in users_ref:
+        query = self.collection.where("phone_number", "==", phone_number).limit(1)
+        docs = await anyio.to_thread.run_sync(query.get)
+        for doc in docs:
             return User(**doc.to_dict())
         return None
 
@@ -25,10 +35,10 @@ class AuthRepository:
             "last_login_at": now
         })
         
-        self.collection.document(user_id).set(user_data)
+        doc_ref = self.collection.document(user_id)
+        await anyio.to_thread.run_sync(doc_ref.set, user_data)
         return User(**user_data)
 
     async def update_last_login(self, user_id: str):
-        self.collection.document(user_id).update({
-            "last_login_at": datetime.utcnow()
-        })
+        doc_ref = self.collection.document(user_id)
+        await anyio.to_thread.run_sync(doc_ref.update, {"last_login_at": datetime.utcnow()})

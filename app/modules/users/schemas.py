@@ -20,33 +20,11 @@ class UserUpdate(BaseModel):
     preferred_language: Optional[str] = None
     preferred_currency: Optional[str] = None
 
-class BalanceTopUpRequest(BaseModel):
-    amount: float
-    imsi: Optional[str] = None # If provided, funds go to this IMSI
-
-class ChangePasswordRequest(BaseModel):
-    old_password: str
-    new_password: str
-
 class VerifyRequest(BaseModel):
     verification_code: str
 
 class  AvatarUploadRequest(BaseModel):
     avatar_path: str
-
-class Transaction(BaseModel):
-    id: str
-    type: str
-    amount: float
-    currency: str
-    date: datetime
-    status: str
-    description: Optional[str] = None
-
-class BalanceHistoryResponse(BaseModel):
-    transactions: List[Transaction]
-    total_top_up: float
-    total_spent: float
 
 class User(UserBase):
     id: str
