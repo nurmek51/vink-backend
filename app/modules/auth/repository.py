@@ -25,6 +25,13 @@ class AuthRepository:
             return User(**doc.to_dict())
         return None
 
+    async def get_user_by_id(self, user_id: str):
+        doc_ref = self.collection.document(user_id)
+        doc = await anyio.to_thread.run_sync(doc_ref.get)
+        if doc.exists:
+            return User(**doc.to_dict())
+        return None
+
     async def create_user(self, user_create: UserCreate) -> User:
         user_id = str(uuid.uuid4())
         now = datetime.utcnow()

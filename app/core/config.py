@@ -8,7 +8,8 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: str = "nurmek-vink-dev"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8  # 8 days
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 # 1 hour
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30 # 30 days
     BACKEND_CORS_ORIGINS: List[str] = [
         "https://vink-sim.vercel.app",
         "http://localhost:3000",
@@ -29,6 +30,11 @@ class Settings(BaseSettings):
     ADMIN_API_KEY: str = "nurmekadminapi!"
     # Admin API Key (SHA-256 hash)
     ADMIN_API_KEY_HASH: str = "35b801e69c7fef51490614f09ffd50818a35d18260072eabccc65882aaa77eac"
+    
+    # Twilio
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_SERVICE_SID: str = ""
     
     class Config:
         env_file = ".env"

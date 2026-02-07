@@ -9,3 +9,4 @@ httpx
 pydantic-settings
 pytest
 email-validator
+twilio

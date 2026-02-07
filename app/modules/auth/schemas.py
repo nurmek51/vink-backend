@@ -10,7 +10,12 @@ class OTPVerify(BaseModel):
 
 class Token(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str
     expires_in: int
+    refresh_expires_in: int
     user_id: Optional[str] = None
     firebase_custom_token: Optional[str] = None
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
