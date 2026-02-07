@@ -37,15 +37,45 @@ jobs:
     steps:
       - name: Deploy to GCP VM via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_SERVICE_SID: ${{ secrets.TWILIO_SERVICE_SID }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+          ADMIN_API_KEY_HASH: ${{ secrets.ADMIN_API_KEY_HASH }}
+          IMSI_USERNAME: ${{ secrets.IMSI_USERNAME }}
+          IMSI_PASSWORD: ${{ secrets.IMSI_PASSWORD }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: TWILIO_ACCOUNT_SID,TWILIO_AUTH_TOKEN,TWILIO_SERVICE_SID,SECRET_KEY,ADMIN_API_KEY,ADMIN_API_KEY_HASH,IMSI_USERNAME,IMSI_PASSWORD
           script: |
             set -e
             cd /var/www/vink-server
             git fetch origin main
             git reset --hard origin/main
+            
+            # Create .env from secrets passed via env
+            cat <<EOF > .env
+            PROJECT_NAME="Vink Backend"
+            SECRET_KEY="$SECRET_KEY"
+            ALGORITHM="HS256"
+            ACCESS_TOKEN_EXPIRE_MINUTES=11520
+            ADMIN_API_KEY="$ADMIN_API_KEY"
+            ADMIN_API_KEY_HASH="$ADMIN_API_KEY_HASH"
+            FIREBASE_CREDENTIALS_PATH="vink-testik.json"
+            IMSI_API_URL="https://mit.imsipay.com/b2b"
+            IMSI_USERNAME="$IMSI_USERNAME"
+            IMSI_PASSWORD="$IMSI_PASSWORD"
+            MOCK_OTP_CODE="123456"
+            ENVIRONMENT="production"
+            TWILIO_ACCOUNT_SID="$TWILIO_ACCOUNT_SID"
+            TWILIO_AUTH_TOKEN="$TWILIO_AUTH_TOKEN"
+            TWILIO_SERVICE_SID="$TWILIO_SERVICE_SID"
+            EOF
+            
             # Using up -d --build to rebuild images and restart containers minimal downtime
             docker compose up -d --build
             # Clean up unused images to save disk space

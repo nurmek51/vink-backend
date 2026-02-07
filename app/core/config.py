@@ -45,17 +45,3 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
-
-# Debug info
-if not settings.TWILIO_ACCOUNT_SID:
-    print(f"DEBUG: TWILIO_ACCOUNT_SID is empty. Current working directory: {os.getcwd()}")
-    if os.path.exists(".env"):
-        print("DEBUG: .env file found in current directory.")
-        with open(".env", "r") as f:
-            lines = f.readlines()
-            print(f"DEBUG: .env file has {len(lines)} lines.")
-            for line in lines:
-                if "TWILIO" in line.upper():
-                    print(f"DEBUG: Found line with TWILIO in .env: {line.split('=')[0]}...")
-    else:
-        print("DEBUG: .env file NOT found in current directory.")
