@@ -1,5 +1,6 @@
+import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+from typing import List, Optional
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Vink Backend"
@@ -32,9 +33,9 @@ class Settings(BaseSettings):
     ADMIN_API_KEY_HASH: str = "35b801e69c7fef51490614f09ffd50818a35d18260072eabccc65882aaa77eac"
     
     # Twilio
-    TWILIO_ACCOUNT_SID: str = ""
-    TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_SERVICE_SID: str = ""
+    TWILIO_ACCOUNT_SID: Optional[str] = None
+    TWILIO_AUTH_TOKEN: Optional[str] = None
+    TWILIO_SERVICE_SID: Optional[str] = None
     
     model_config = SettingsConfigDict(
         env_file=".env", 
@@ -44,3 +45,17 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
+
+# Debug info
+if not settings.TWILIO_ACCOUNT_SID:
+    print(f"DEBUG: TWILIO_ACCOUNT_SID is empty. Current working directory: {os.getcwd()}")
+    if os.path.exists(".env"):
+        print("DEBUG: .env file found in current directory.")
+        with open(".env", "r") as f:
+            lines = f.readlines()
+            print(f"DEBUG: .env file has {len(lines)} lines.")
+            for line in lines:
+                if "TWILIO" in line.upper():
+                    print(f"DEBUG: Found line with TWILIO in .env: {line.split('=')[0]}...")
+    else:
+        print("DEBUG: .env file NOT found in current directory.")

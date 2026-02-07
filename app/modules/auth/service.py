@@ -15,11 +15,18 @@ class AuthService:
     def __init__(self):
         self.repository = AuthRepository()
         self.twilio_client = None
-        if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN:
-            self.twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            logger.info("Twilio client initialized.")
+        
+        sid = settings.TWILIO_ACCOUNT_SID
+        token = settings.TWILIO_AUTH_TOKEN
+        
+        if sid and token:
+            try:
+                self.twilio_client = Client(sid, token)
+                logger.info(f"Twilio client initialized with SID starting with: {sid[:5]}...")
+            except Exception as e:
+                logger.error(f"Failed to initialize Twilio client: {str(e)}")
         else:
-            logger.warning("Twilio credentials missing. Twilio client NOT initialized.")
+            logger.warning(f"Twilio credentials missing. SID: {'found' if sid else 'missing'}, TOKEN: {'found' if token else 'missing'}. Twilio client NOT initialized.")
 
     async def send_otp(self, request: OTPRequest, channel: str = "sms"):
         """
