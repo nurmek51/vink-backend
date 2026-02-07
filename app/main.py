@@ -1,8 +1,12 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.core.config import settings
 from app.common.logging import setup_logging
+
+# Setup logging before other imports to ensure they can log during initialization
+setup_logging()
+
+from app.core.config import settings
 from app.common.exceptions import AppError
 from app.modules.auth.router import router as auth_router
 from app.modules.users.router import router as users_router
@@ -11,8 +15,6 @@ from app.modules.wallet.router import router as wallet_router
 from app.infrastructure.firestore import init_firestore
 from app.common.responses import ErrorResponse, ErrorDetail
 from contextlib import asynccontextmanager
-
-setup_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

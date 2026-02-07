@@ -4,6 +4,7 @@ from app.modules.users.schemas import UserCreate
 from app.core.jwt import create_access_token, create_refresh_token, decode_token
 from app.common.exceptions import UnauthorizedError, BadRequestError
 from app.core.config import settings
+from app.common.logging import logger
 from datetime import timedelta
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
@@ -16,6 +17,9 @@ class AuthService:
         self.twilio_client = None
         if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN:
             self.twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            logger.info("Twilio client initialized.")
+        else:
+            logger.warning("Twilio credentials missing. Twilio client NOT initialized.")
 
     async def send_otp(self, request: OTPRequest, channel: str = "sms"):
         """
@@ -24,16 +28,19 @@ class AuthService:
         if not self.twilio_client:
             # If no credentials configured, we can't send real SMS.
             if settings.MOCK_OTP_CODE:
+                logger.info(f"Twilio not configured. Mocking OTP send to {request.phone_number} via {channel}.")
                 return True # Assume developer will use mock code
-            print("Warning: Twilio credentials not set. OTP not sent.")
+            logger.error("Twilio credentials not set and no mock code configured. OTP not sent.")
             return True
 
         try:
+            logger.info(f"Sending OTP to {request.phone_number} via {channel}")
             self.twilio_client.verify.v2.services(
                 settings.TWILIO_SERVICE_SID
             ).verifications.create(to=request.phone_number, channel=channel)
             return True
         except TwilioRestException as e:
+            logger.error(f"Twilio error sending OTP: {e.msg}")
             raise BadRequestError(f"Failed to send OTP via {channel}: {e.msg}")
 
     async def verify_otp(self, verify: OTPVerify) -> Token:
