@@ -44,8 +44,8 @@ class Settings(BaseSettings):
     EPAY_CLIENT_ID: str = "test"
     EPAY_CLIENT_SECRET: str = "yF587AV9Ms94qN2QShFzVR3vFnWkhjbAK3sG"
     EPAY_TERMINAL_ID: str = "67e34d63-102f-4bd1-898e-370781d0074d"
-    EPAY_POSTLINK_BASE_URL: str = "https://vinksim.com"  # Public URL of this server
-    EPAY_CHECKOUT_BASE_URL: str = "http://127.0.0.1:8000"  # URL clients open for hosted checkout page
+    EPAY_POSTLINK_BASE_URL: str = "https://nurmek.site"  # Public URL of this server
+    EPAY_CHECKOUT_BASE_URL: str = "https://nurmek.site"  # URL clients open for hosted checkout page
 
     model_config = SettingsConfigDict(
         env_file=".env", 
