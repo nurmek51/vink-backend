@@ -1,6 +1,5 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Query
 from typing import List, Optional
-import json
 from fastapi.responses import HTMLResponse
 
 from app.core.dependencies import require_app_permission, require_admin_api_key
@@ -18,7 +17,6 @@ from app.modules.payment.schemas import (
     ChargeRequest,
 )
 from app.modules.payment.service import PaymentService
-from app.providers.epay.schemas import EpayPostlinkPayload
 from app.common.responses import DataResponse
 from app.common.logging import logger
 
@@ -162,10 +160,11 @@ async def list_payments(
 )
 async def get_payment_status(
     payment_id: str,
+    sync: bool = Query(True, description="If true, reconcile pending status with ePay before response"),
     current_user: User = Depends(require_app_permission("vink")),
     service: PaymentService = Depends(_get_service),
 ):
-    result = await service.get_payment_status(current_user.id, payment_id)
+    result = await service.get_payment_status(current_user.id, payment_id, sync_with_epay=sync)
     return DataResponse(data=result)
 
 
@@ -185,16 +184,24 @@ async def epay_webhook(request: Request, service: PaymentService = Depends(_get_
     It accepts both JSON and form-encoded bodies.
     """
     content_type = request.headers.get("content-type", "")
-    if "application/json" in content_type:
-        body = await request.json()
-    else:
-        form = await request.form()
-        body = dict(form)
-
-    logger.info("ePay webhook raw body: %s", body)
-
-    payload = EpayPostlinkPayload(**body)
-    await service.handle_webhook(payload)
+    logger.info(
+        "Webhook request received: content_type=%s ua=%s ip=%s",
+        content_type,
+        request.headers.get("user-agent"),
+        request.client.host if request.client else "unknown",
+    )
+    try:
+        if "application/json" in content_type:
+            body = await request.json()
+        else:
+            form = await request.form()
+            body = dict(form)
+        logger.info("ePay webhook raw body: %s", body)
+        await service.handle_webhook_raw(body)
+    except Exception as exc:
+        logger.exception("Webhook processing failed: %s", exc)
+        # Return 200 to avoid aggressive retries by provider while we inspect logs
+        return {"status": "error", "message": "logged"}
 
     # ePay expects HTTP 200 to acknowledge receipt
     return {"status": "ok"}
@@ -211,11 +218,10 @@ async def epay_webhook(request: Request, service: PaymentService = Depends(_get_
 async def admin_charge_payment(
     payment_id: str,
     body: Optional[ChargeRequest] = None,
-    user_id: str = "",
     _admin: str = Depends(require_admin_api_key),
     service: PaymentService = Depends(_get_service),
 ):
-    record = await service.charge_payment(user_id, payment_id, body.amount if body else None)
+    record = await service.charge_payment(payment_id, body.amount if body else None)
     return DataResponse(data=record.dict(), message="Payment charged")
 
 
@@ -226,11 +232,10 @@ async def admin_charge_payment(
 async def admin_refund_payment(
     payment_id: str,
     body: Optional[RefundRequest] = None,
-    user_id: str = "",
     _admin: str = Depends(require_admin_api_key),
     service: PaymentService = Depends(_get_service),
 ):
-    record = await service.refund_payment(user_id, payment_id, body.amount if body else None)
+    record = await service.refund_payment(payment_id, body.amount if body else None)
     return DataResponse(data=record.dict(), message="Payment refunded")
 
 

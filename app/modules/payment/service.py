@@ -50,6 +50,8 @@ class PaymentService:
         payment_id = str(uuid.uuid4())
         secret_hash = secrets.token_urlsafe(24)
         checkout_token = secrets.token_urlsafe(32)
+        back_link = req.back_link or settings.EPAY_DEFAULT_BACK_LINK
+        failure_back_link = req.failure_back_link or settings.EPAY_DEFAULT_FAILURE_BACK_LINK
 
         post_link = self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook")
         failure_post_link = self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook")
@@ -74,8 +76,8 @@ class PaymentService:
             payment_type=PaymentType.ONE_TIME,
             secret_hash=secret_hash,
             checkout_token=checkout_token,
-            back_link=req.back_link,
-            failure_back_link=req.failure_back_link,
+            back_link=back_link,
+            failure_back_link=failure_back_link,
             language=req.language,
         )
         await self.repo.create_payment(record)
@@ -103,8 +105,8 @@ class PaymentService:
             terminal=self.epay.terminal_id,
             amount=req.amount,
             currency="KZT",
-            back_link=req.back_link,
-            failure_back_link=req.failure_back_link,
+            back_link=back_link,
+            failure_back_link=failure_back_link,
             post_link=post_link,
             failure_post_link=failure_post_link,
             description=req.description,
@@ -332,6 +334,8 @@ class PaymentService:
             logger.error("Webhook: no payment record for invoice=%s", payload.invoiceId)
             return
 
+        previous_status = record.status
+
         # Verify with ePay regardless of callback code
         status_resp = await self.epay.check_transaction_status(payload.invoiceId)
 
@@ -351,7 +355,11 @@ class PaymentService:
                 record.status = PaymentStatus.AUTH if epay_status == "AUTH" else PaymentStatus.CHARGE
 
                 # Credit user balance for one-time / recurrent payments
-                if record.payment_type in (PaymentType.ONE_TIME, PaymentType.RECURRENT) and record.amount > 0:
+                if (
+                    previous_status not in (PaymentStatus.AUTH, PaymentStatus.CHARGE)
+                    and record.payment_type in (PaymentType.ONE_TIME, PaymentType.RECURRENT)
+                    and record.amount > 0
+                ):
                     await self._credit_user_balance(record.user_id, record.amount)
                     await self.wallet_service.log_transaction(
                         user_id=record.user_id,
@@ -397,8 +405,8 @@ class PaymentService:
     # 6. Admin: charge, refund, status
     # ------------------------------------------------------------------
 
-    async def charge_payment(self, user_id: str, payment_id: str, amount: Optional[float] = None) -> PaymentRecord:
-        record = await self.repo.get_payment(user_id, payment_id)
+    async def charge_payment(self, payment_id: str, amount: Optional[float] = None) -> PaymentRecord:
+        record = await self.repo.get_payment_any_user(payment_id)
         if not record:
             raise NotFoundError("Payment not found")
         if not record.epay_transaction_id:
@@ -408,8 +416,8 @@ class PaymentService:
         await self.repo.update_payment(record)
         return record
 
-    async def refund_payment(self, user_id: str, payment_id: str, amount: Optional[float] = None) -> PaymentRecord:
-        record = await self.repo.get_payment(user_id, payment_id)
+    async def refund_payment(self, payment_id: str, amount: Optional[float] = None) -> PaymentRecord:
+        record = await self.repo.get_payment_any_user(payment_id)
         if not record:
             raise NotFoundError("Payment not found")
         if not record.epay_transaction_id:
@@ -419,10 +427,14 @@ class PaymentService:
         await self.repo.update_payment(record)
         return record
 
-    async def get_payment_status(self, user_id: str, payment_id: str) -> PaymentStatusOut:
+    async def get_payment_status(self, user_id: str, payment_id: str, sync_with_epay: bool = True) -> PaymentStatusOut:
         record = await self.repo.get_payment(user_id, payment_id)
         if not record:
             raise NotFoundError("Payment not found")
+
+        if sync_with_epay and record.status == PaymentStatus.PENDING:
+            record = await self._sync_payment_status_from_epay(record)
+
         return PaymentStatusOut(
             payment_id=record.id,
             invoice_id=record.invoice_id,
@@ -453,6 +465,56 @@ class PaymentService:
         resp = await self.epay.check_transaction_status(invoice_id)
         return resp.dict()
 
+    async def handle_webhook_raw(self, payload: dict) -> None:
+        invoice_id = payload.get("invoiceId") or payload.get("invoiceID")
+        if not invoice_id:
+            logger.error("Webhook payload missing invoiceId: %s", payload)
+            return
+
+        code = payload.get("code")
+        reason = payload.get("reason", "")
+        reason_code = payload.get("reasonCode")
+        try:
+            reason_code_int = int(reason_code) if reason_code is not None else -1
+        except (TypeError, ValueError):
+            reason_code_int = -1
+
+        parsed = EpayPostlinkPayload(
+            id=str(payload.get("id") or "unknown"),
+            dateTime=str(payload.get("dateTime") or datetime.utcnow().isoformat()),
+            invoiceId=str(invoice_id),
+            amount=float(payload.get("amount") or 0),
+            currency=str(payload.get("currency") or "KZT"),
+            terminal=str(payload.get("terminal") or settings.EPAY_TERMINAL_ID),
+            code=str(code or "unknown"),
+            reason=str(reason),
+            reasonCode=reason_code_int,
+            accountId=payload.get("accountId"),
+            description=payload.get("description"),
+            language=payload.get("language"),
+            cardMask=payload.get("cardMask"),
+            cardType=payload.get("cardType"),
+            issuer=payload.get("issuer"),
+            reference=payload.get("reference"),
+            secure=payload.get("secure"),
+            secureDetails=payload.get("secureDetails"),
+            tokenRecipient=payload.get("tokenRecipient"),
+            name=payload.get("name"),
+            email=payload.get("email"),
+            phone=payload.get("phone"),
+            ip=payload.get("ip"),
+            ipCountry=payload.get("ipCountry"),
+            ipCity=payload.get("ipCity"),
+            ipRegion=payload.get("ipRegion"),
+            ipDistrict=payload.get("ipDistrict"),
+            ipLongitude=payload.get("ipLongitude"),
+            ipLatitude=payload.get("ipLatitude"),
+            cardId=payload.get("cardId"),
+            secret_hash=payload.get("secret_hash"),
+            approvalCode=payload.get("approvalCode"),
+        )
+        await self.handle_webhook(parsed)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -465,6 +527,49 @@ class PaymentService:
         new_balance = user.balance + amount
         await self.user_repo.update_user(user_id, {"balance": new_balance})
         logger.info("User %s balance updated: %.2f → %.2f", user_id, user.balance, new_balance)
+
+    async def _sync_payment_status_from_epay(self, record: PaymentRecord) -> PaymentRecord:
+        status_resp = await self.epay.check_transaction_status(record.invoice_id)
+        if status_resp.resultCode != "100" or not status_resp.transaction:
+            return record
+
+        txn = status_resp.transaction
+        epay_status = (txn.statusName or "").upper()
+        previous_status = record.status
+
+        record.epay_transaction_id = txn.id
+        record.card_mask = txn.cardMask
+        record.card_type = txn.cardType
+        record.reference = txn.reference
+        record.reason = txn.reason
+        record.reason_code = int(txn.reasonCode) if txn.reasonCode else None
+        record.card_id = txn.cardID
+
+        if epay_status == "AUTH":
+            record.status = PaymentStatus.AUTH
+        elif epay_status == "CHARGE":
+            record.status = PaymentStatus.CHARGE
+        elif epay_status == "REFUND":
+            record.status = PaymentStatus.REFUND
+        elif epay_status == "CANCEL":
+            record.status = PaymentStatus.CANCEL
+
+        if (
+            previous_status not in (PaymentStatus.AUTH, PaymentStatus.CHARGE)
+            and record.status in (PaymentStatus.AUTH, PaymentStatus.CHARGE)
+            and record.payment_type in (PaymentType.ONE_TIME, PaymentType.RECURRENT)
+            and record.amount > 0
+        ):
+            await self._credit_user_balance(record.user_id, record.amount)
+            await self.wallet_service.log_transaction(
+                user_id=record.user_id,
+                type="top_up",
+                amount=record.amount,
+                description=f"ePay payment {record.invoice_id}",
+            )
+
+        await self.repo.update_payment(record)
+        return record
 
     @staticmethod
     def _generate_invoice_id() -> str:

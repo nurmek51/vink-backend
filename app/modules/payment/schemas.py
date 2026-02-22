@@ -61,7 +61,7 @@ class InitiatePaymentRequest(BaseModel):
     """Client requests a payment session (one-time top-up)."""
     amount: float = Field(..., gt=0, description="Amount in KZT")
     description: str = Field("Top-up", max_length=125)
-    back_link: str = Field(..., description="URL on success redirect")
+    back_link: Optional[str] = Field(None, description="URL on success redirect")
     failure_back_link: Optional[str] = Field(None, description="URL on failure redirect")
     language: str = Field("rus", pattern="^(rus|kaz|eng)$")
 

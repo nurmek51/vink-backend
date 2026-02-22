@@ -35,6 +35,11 @@ class PaymentRepository:
     async def create_payment(self, record: PaymentRecord) -> PaymentRecord:
         ref = self._payments_ref(record.user_id).document(record.id)
         await anyio.to_thread.run_sync(ref.set, record.dict())
+        index_ref = self.db.collection("payment_records").document(record.id)
+        await anyio.to_thread.run_sync(
+            index_ref.set,
+            {"payment_id": record.id, "user_id": record.user_id, "invoice_id": record.invoice_id},
+        )
         logger.info("Payment record created: %s (user=%s)", record.id, record.user_id)
         return record
 
@@ -124,6 +129,16 @@ class PaymentRepository:
         if mapping.get("checkout_token") != checkout_token:
             return None
         user_id = mapping.get("user_id")
+        if not user_id:
+            return None
+        return await self.get_payment(user_id, payment_id)
+
+    async def get_payment_any_user(self, payment_id: str) -> Optional[PaymentRecord]:
+        index_ref = self.db.collection("payment_records").document(payment_id)
+        index_doc = await anyio.to_thread.run_sync(index_ref.get)
+        if not index_doc.exists:
+            return None
+        user_id = index_doc.to_dict().get("user_id")
         if not user_id:
             return None
         return await self.get_payment(user_id, payment_id)
