@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.common.logging import logger
 from app.common.exceptions import BadRequestError, NotFoundError, AppError
 from app.modules.payment.repository import PaymentRepository
+from app.modules.payment.esim_repository import PaymentEsimRepository
 from app.modules.payment.schemas import (
     PaymentRecord,
     PaymentStatus,
@@ -22,6 +23,7 @@ from app.modules.payment.schemas import (
 from app.modules.users.repository import UserRepository
 from app.modules.wallet.service import WalletService
 from app.providers.epay.client import EpayClient
+from app.providers.esim_provider.client import EsimProviderClient
 from app.providers.epay.schemas import (
     EpayPostlinkPayload,
     EpayCardIdPaymentRequest,
@@ -33,9 +35,11 @@ class PaymentService:
 
     def __init__(self) -> None:
         self.repo = PaymentRepository()
+        self.esim_repo = PaymentEsimRepository()
         self.user_repo = UserRepository()
         self.wallet_service = WalletService()
         self.epay = EpayClient()
+        self.esim_provider = EsimProviderClient()
 
     # ------------------------------------------------------------------
     # 1. One-time payment initiation
@@ -44,6 +48,10 @@ class PaymentService:
     async def initiate_payment(
         self, user_id: str, req: InitiatePaymentRequest
     ) -> InitiatePaymentResponse:
+        target_esim = await self.esim_repo.get_user_esim(user_id, req.esim_id)
+        if not target_esim:
+            raise NotFoundError("Target eSIM not found")
+
         invoice_id = self._generate_invoice_id()
         payment_id = str(uuid.uuid4())
         secret_hash = secrets.token_urlsafe(24)
@@ -83,6 +91,8 @@ class PaymentService:
             failure_back_link=failure_back_link,
             language=req.language,
             save_card_requested=is_card_save,
+            target_esim_id=req.esim_id,
+            target_imsi=target_esim.get("imsi"),
         )
         await self.repo.create_payment(record)
         await self.repo.create_invoice_mapping(invoice_id, user_id, payment_id)
@@ -194,6 +204,10 @@ class PaymentService:
     async def pay_with_saved_card(
         self, user_id: str, req: RecurrentPaymentRequest
     ) -> RecurrentPaymentResponse:
+        target_esim = await self.esim_repo.get_user_esim(user_id, req.esim_id)
+        if not target_esim:
+            raise NotFoundError("Target eSIM not found")
+
         invoice_id = self._generate_invoice_id()
         payment_id = str(uuid.uuid4())
 
@@ -244,6 +258,8 @@ class PaymentService:
             status=PaymentStatus.PENDING,
             payment_type=PaymentType.RECURRENT,
             card_id=req.card_id,
+            target_esim_id=req.esim_id,
+            target_imsi=target_esim.get("imsi"),
         )
         await self.repo.create_payment(record)
         await self.repo.create_invoice_mapping(invoice_id, user_id, payment_id)
@@ -256,13 +272,7 @@ class PaymentService:
             record.epay_transaction_id = epay_resp.id
             record.reference = epay_resp.reference
             record.card_id = epay_resp.cardID
-            await self._credit_user_balance(record.user_id, record.amount)
-            await self.wallet_service.log_transaction(
-                user_id=record.user_id,
-                type="top_up",
-                amount=record.amount,
-                description=f"ePay payment {record.invoice_id}",
-            )
+            await self._apply_success_effect(record, previous_status=PaymentStatus.PENDING)
             await self.repo.update_payment(record)
         elif requires_3ds:
             record.epay_transaction_id = epay_resp.id
@@ -336,18 +346,7 @@ class PaymentService:
                 record.status = PaymentStatus.AUTH if epay_status == "AUTH" else PaymentStatus.CHARGE
 
                 # Credit user balance for one-time / recurrent payments
-                if (
-                    previous_status not in (PaymentStatus.AUTH, PaymentStatus.CHARGE)
-                    and record.payment_type in (PaymentType.ONE_TIME, PaymentType.RECURRENT)
-                    and record.amount > 0
-                ):
-                    await self._credit_user_balance(record.user_id, record.amount)
-                    await self.wallet_service.log_transaction(
-                        user_id=record.user_id,
-                        type="top_up",
-                        amount=record.amount,
-                        description=f"ePay payment {record.invoice_id}",
-                    )
+                await self._apply_success_effect(record, previous_status=previous_status)
             elif epay_status == "REFUND":
                 record.status = PaymentStatus.REFUND
             elif epay_status == "CANCEL":
@@ -509,6 +508,42 @@ class PaymentService:
         await self.user_repo.update_user(user_id, {"balance": new_balance})
         logger.info("User %s balance updated: %.2f → %.2f", user_id, user.balance, new_balance)
 
+    async def _top_up_target_esim(self, record: PaymentRecord) -> None:
+        if not record.target_esim_id:
+            return
+
+        esim_data = await self.esim_repo.get_user_esim(record.user_id, record.target_esim_id)
+        if not esim_data:
+            raise NotFoundError("Target eSIM not found for payment")
+
+        imsi = record.target_imsi or esim_data.get("imsi")
+        if not imsi:
+            raise NotFoundError("Target eSIM IMSI missing")
+
+        await self.esim_provider.top_up(imsi, record.amount)
+        esim_data["data_limit"] = float(esim_data.get("data_limit", 0.0) or 0.0) + float(record.amount)
+        await self.esim_repo.update_esim(esim_data)
+
+    async def _apply_success_effect(self, record: PaymentRecord, previous_status: PaymentStatus) -> None:
+        if (
+            previous_status in (PaymentStatus.AUTH, PaymentStatus.CHARGE)
+            or record.amount <= 0
+            or record.payment_type not in (PaymentType.ONE_TIME, PaymentType.RECURRENT)
+        ):
+            return
+
+        if record.target_esim_id:
+            await self._top_up_target_esim(record)
+        else:
+            await self._credit_user_balance(record.user_id, record.amount)
+
+        await self.wallet_service.log_transaction(
+            user_id=record.user_id,
+            type="top_up",
+            amount=record.amount,
+            description=f"ePay payment {record.invoice_id}",
+        )
+
     async def _sync_payment_status_from_epay(self, record: PaymentRecord) -> PaymentRecord:
         try:
             status_resp = await self.epay.check_transaction_status(record.invoice_id)
@@ -548,19 +583,8 @@ class PaymentService:
         elif epay_status == "CANCEL":
             record.status = PaymentStatus.CANCEL
 
-        if (
-            previous_status not in (PaymentStatus.AUTH, PaymentStatus.CHARGE)
-            and record.status in (PaymentStatus.AUTH, PaymentStatus.CHARGE)
-            and record.payment_type in (PaymentType.ONE_TIME, PaymentType.RECURRENT)
-            and record.amount > 0
-        ):
-            await self._credit_user_balance(record.user_id, record.amount)
-            await self.wallet_service.log_transaction(
-                user_id=record.user_id,
-                type="top_up",
-                amount=record.amount,
-                description=f"ePay payment {record.invoice_id}",
-            )
+        if record.status in (PaymentStatus.AUTH, PaymentStatus.CHARGE):
+            await self._apply_success_effect(record, previous_status=previous_status)
 
         await self.repo.update_payment(record)
         return record

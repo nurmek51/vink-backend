@@ -62,6 +62,7 @@ Endpoint: POST /payments/initiate
 Request (one-time top-up):
 ```json
 {
+  "esim_id": "<user_esim_id>",
   "amount": 5,
   "description": "Top-up",
   "save_card": false,
@@ -72,6 +73,7 @@ Request (one-time top-up):
 Request (save card):
 ```json
 {
+  "esim_id": "<user_esim_id>",
   "amount": 5,
   "save_card": true,
   "language": "rus"
@@ -118,6 +120,7 @@ Endpoint: POST /payments/recurrent
 Request:
 ```json
 {
+  "esim_id": "<user_esim_id>",
   "card_id": "<saved_card_id>",
   "amount": 5,
   "description": "Subscription",

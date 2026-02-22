@@ -50,6 +50,8 @@ class PaymentRecord(BaseModel):
     failure_back_link: Optional[str] = None
     language: Optional[str] = None
     save_card_requested: bool = False
+    target_esim_id: Optional[str] = None
+    target_imsi: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: Optional[datetime] = None
 
@@ -61,6 +63,7 @@ class PaymentRecord(BaseModel):
 class InitiatePaymentRequest(BaseModel):
     """Client requests a payment session (one-time top-up)."""
     amount: Optional[float] = Field(None, gt=0, description="Amount in KZT")
+    esim_id: str = Field(..., description="Target eSIM id to top up")
     description: str = Field("Top-up", max_length=125)
     save_card: bool = Field(False, description="If true, initiates card verification/saving flow")
     language: str = Field("rus", pattern="^(rus|kaz|eng)$")
@@ -94,6 +97,7 @@ class InitiatePaymentResponse(BaseModel):
 
 class RecurrentPaymentRequest(BaseModel):
     """Server-side payment using a saved card."""
+    esim_id: str = Field(..., description="Target eSIM id to top up")
     card_id: str = Field(..., description="Stored ePay cardId UUID")
     amount: float = Field(..., gt=0)
     description: str = Field("Recurrent charge", max_length=125)
