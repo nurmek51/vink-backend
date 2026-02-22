@@ -51,6 +51,88 @@ Empty successful responses (actions etc):
 
 ## API Endpoints
 
+### Payment APIs (ePay)
+
+Unified entrypoint for both one-time top-up and card-save:
+
+#### Initiate Payment / Card Save
+
+Endpoint: POST /payments/initiate
+
+Request (one-time top-up):
+```json
+{
+  "amount": 5,
+  "description": "Top-up",
+  "save_card": false,
+  "language": "rus"
+}
+```
+
+Request (save card):
+```json
+{
+  "save_card": true,
+  "language": "rus"
+}
+```
+
+Notes:
+- back_link and failure_back_link are no longer passed by client.
+- Redirect links are taken from backend env:
+  - EPAY_DEFAULT_BACK_LINK
+  - EPAY_DEFAULT_FAILURE_BACK_LINK
+
+Response (200):
+```json
+{
+  "success": true,
+  "message": "Payment session created",
+  "data": {
+    "invoice_id": "760532487",
+    "payment_id": "67677ca6-e3c2-48b8-bcd6-abb25bf41687",
+    "payment_type": "one_time",
+    "checkout_url": "https://your-domain/api/v1/payments/checkout/<payment_id>?token=<token>",
+    "amount": 5,
+    "currency": "KZT"
+  }
+}
+```
+
+Frontend must open only checkout_url (WebView/browser).
+
+#### Get Payment Status
+
+Endpoint: GET /payments/status/{payment_id}?sync=true
+
+- sync=true: backend attempts live reconciliation with ePay before returning.
+- sync=false: returns local DB status only.
+
+#### Recurrent Payment (saved card)
+
+Endpoint: POST /payments/recurrent
+
+Request:
+```json
+{
+  "card_id": "<saved_card_id>",
+  "amount": 5,
+  "description": "Subscription",
+  "currency": "KZT"
+}
+```
+
+#### Saved cards
+
+- GET /payments/saved-cards
+- DELETE /payments/saved-cards/{card_id}
+
+#### Webhook
+
+Endpoint: POST /payments/webhook
+
+Webhook verifies status with ePay and updates payment state. For successful one-time/recurrent payments, user balance is increased once (idempotent).
+
 ### 1. Authentication APIs
 
 #### 1.1 Send OTP via WhatsApp

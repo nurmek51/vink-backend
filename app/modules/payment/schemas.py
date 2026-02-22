@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -59,17 +59,23 @@ class PaymentRecord(BaseModel):
 
 class InitiatePaymentRequest(BaseModel):
     """Client requests a payment session (one-time top-up)."""
-    amount: float = Field(..., gt=0, description="Amount in KZT")
+    amount: Optional[float] = Field(None, gt=0, description="Amount in KZT (required when save_card=false)")
     description: str = Field("Top-up", max_length=125)
-    back_link: Optional[str] = Field(None, description="URL on success redirect")
-    failure_back_link: Optional[str] = Field(None, description="URL on failure redirect")
+    save_card: bool = Field(False, description="If true, initiates card verification/saving flow")
     language: str = Field("rus", pattern="^(rus|kaz|eng)$")
+
+    @model_validator(mode="after")
+    def validate_amount_for_non_card_save(self):
+        if not self.save_card and self.amount is None:
+            raise ValueError("amount is required when save_card is false")
+        return self
 
 
 class InitiatePaymentResponse(BaseModel):
     """Returned to the frontend to open the ePay payment page / widget."""
     invoice_id: str
     payment_id: str
+    payment_type: PaymentType
     checkout_url: str
     auth: dict  # Full token object to pass into halyk.pay()
     payment_page_url: str
@@ -82,28 +88,6 @@ class InitiatePaymentResponse(BaseModel):
     failure_post_link: str
     description: str
     language: str
-
-
-class InitiateCardSaveRequest(BaseModel):
-    """Client requests a card-save session."""
-    back_link: str
-    failure_back_link: Optional[str] = None
-    language: str = Field("rus", pattern="^(rus|kaz|eng)$")
-
-
-class InitiateCardSaveResponse(BaseModel):
-    invoice_id: str
-    auth: dict
-    payment_page_url: str
-    terminal: str
-    amount: int = 0
-    currency: str = "USD"
-    back_link: str
-    failure_back_link: Optional[str] = None
-    post_link: str
-    language: str
-    card_save: bool = True
-    payment_type: str = "cardVerification"
 
 
 class RecurrentPaymentRequest(BaseModel):

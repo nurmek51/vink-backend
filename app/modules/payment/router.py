@@ -7,8 +7,6 @@ from app.modules.users.schemas import User
 from app.modules.payment.schemas import (
     InitiatePaymentRequest,
     InitiatePaymentResponse,
-    InitiateCardSaveRequest,
-    InitiateCardSaveResponse,
     RecurrentPaymentRequest,
     RecurrentPaymentResponse,
     SavedCardOut,
@@ -19,7 +17,6 @@ from app.modules.payment.schemas import (
 from app.modules.payment.service import PaymentService
 from app.common.responses import DataResponse
 from app.common.logging import logger
-from app.common.exceptions import AppError
 
 router = APIRouter()
 
@@ -59,46 +56,6 @@ async def payment_checkout_page(
 ):
     html = await service.get_checkout_html(payment_id, token)
     return HTMLResponse(content=html, status_code=200)
-
-
-@router.post(
-        "/payments/dev/checkout-html",
-    summary="DEV: Create payment and return checkout URL",
-)
-async def initiate_payment_checkout_html(
-        req: InitiatePaymentRequest,
-        current_user: User = Depends(require_app_permission("vink")),
-        service: PaymentService = Depends(_get_service),
-):
-        """Convenience endpoint for manual QA:
-
-        1) Creates payment session in backend.
-        2) Returns an HTML page that auto-runs `halyk.pay(...)`.
-        """
-        result = await service.initiate_payment(current_user.id, req)
-        return DataResponse(
-            data={
-                "payment_id": result.payment_id,
-                "invoice_id": result.invoice_id,
-                "checkout_url": result.checkout_url,
-                "status_url": f"/api/v1/payments/status/{result.payment_id}",
-            },
-            message="Open checkout_url in browser/WebView",
-        )
-
-
-@router.post(
-    "/payments/card-save",
-    response_model=DataResponse[InitiateCardSaveResponse],
-    summary="Initiate card-save (verification) session",
-)
-async def initiate_card_save(
-    req: InitiateCardSaveRequest,
-    current_user: User = Depends(require_app_permission("vink")),
-    service: PaymentService = Depends(_get_service),
-):
-    result = await service.initiate_card_save(current_user.id, req)
-    return DataResponse(data=result, message="Card save session created")
 
 
 @router.post(
@@ -253,36 +210,3 @@ async def admin_verify_payment(
     return DataResponse(data=result, message="Status retrieved from ePay")
 
 
-@router.get(
-    "/admin/payments/health",
-    summary="Admin health check for ePay connectivity",
-)
-async def admin_payments_health(
-    _admin: dict = Depends(require_admin_api_key),
-    service: PaymentService = Depends(_get_service),
-):
-    probe_invoice_id = "000000001"
-    try:
-        probe = await service.verify_payment_from_epay(probe_invoice_id)
-        return DataResponse(
-            data={
-                "admin_auth_mode": _admin.get("mode"),
-                "epay_reachable": True,
-                "probe_invoice_id": probe_invoice_id,
-                "probe_result": {
-                    "resultCode": probe.get("resultCode"),
-                    "resultMessage": probe.get("resultMessage"),
-                },
-            },
-            message="Health check completed",
-        )
-    except AppError as exc:
-        return DataResponse(
-            data={
-                "admin_auth_mode": _admin.get("mode"),
-                "epay_reachable": False,
-                "probe_invoice_id": probe_invoice_id,
-                "error": exc.detail,
-            },
-            message="Health check completed with connectivity issue",
-        )
