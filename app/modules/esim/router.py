@@ -96,3 +96,12 @@ async def sync_esim_activation_codes(
 ):
     result = await service.sync_activation_codes()
     return DataResponse(data=result)
+
+
+@router.post("/esims/internal/{id}/run-autopay")
+async def run_esim_autopay_internal(
+    id: str,
+    _admin_key: str = Depends(require_admin_api_key)
+):
+    result = await service.run_autopay_for_esim_admin(id)
+    return DataResponse(data=result)

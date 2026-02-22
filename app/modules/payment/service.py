@@ -51,30 +51,19 @@ class PaymentService:
         back_link = settings.EPAY_DEFAULT_BACK_LINK
         failure_back_link = settings.EPAY_DEFAULT_FAILURE_BACK_LINK
         is_card_save = req.save_card
+        payment_amount = float(req.amount or 0)
+        payment_currency = "KZT"
+        payment_description = req.description
+        payment_type = PaymentType.ONE_TIME
 
-        if is_card_save:
-            payment_amount = 0.0
-            payment_currency = "USD"
-            payment_description = "Card verification"
-            payment_type = PaymentType.CARD_SAVE
-            token_resp = await self.epay.obtain_card_save_token(
-                invoice_id=invoice_id,
-                post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-                failure_post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-            )
-        else:
-            payment_amount = float(req.amount or 0)
-            payment_currency = "KZT"
-            payment_description = req.description
-            payment_type = PaymentType.ONE_TIME
-            token_resp = await self.epay.obtain_payment_token(
-                invoice_id=invoice_id,
-                amount=payment_amount,
-                currency=payment_currency,
-                post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-                failure_post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-                secret_hash=secret_hash,
-            )
+        token_resp = await self.epay.obtain_payment_token(
+            invoice_id=invoice_id,
+            amount=payment_amount,
+            currency=payment_currency,
+            post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
+            failure_post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
+            secret_hash=secret_hash,
+        )
 
         post_link = self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook")
         failure_post_link = self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook")
@@ -88,11 +77,12 @@ class PaymentService:
             description=payment_description,
             status=PaymentStatus.PENDING,
             payment_type=payment_type,
-            secret_hash=secret_hash if not is_card_save else None,
+            secret_hash=secret_hash,
             checkout_token=checkout_token,
             back_link=back_link,
             failure_back_link=failure_back_link,
             language=req.language,
+            save_card_requested=is_card_save,
         )
         await self.repo.create_payment(record)
         await self.repo.create_invoice_mapping(invoice_id, user_id, payment_id)
@@ -114,6 +104,7 @@ class PaymentService:
             invoice_id=invoice_id,
             payment_id=payment_id,
             payment_type=payment_type,
+            save_card=is_card_save,
             checkout_url=checkout_url,
             auth=auth_object,
             payment_page_url=settings.EPAY_PAYMENT_PAGE_JS,
@@ -136,21 +127,14 @@ class PaymentService:
         if not record.back_link:
             raise BadRequestError("Payment back_link is missing")
 
-        if record.payment_type == PaymentType.CARD_SAVE:
-            payment_token = await self.epay.obtain_card_save_token(
-                invoice_id=record.invoice_id,
-                post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-                failure_post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-            )
-        else:
-            payment_token = await self.epay.obtain_payment_token(
-                invoice_id=record.invoice_id,
-                amount=record.amount,
-                currency=record.currency,
-                post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-                failure_post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-                secret_hash=record.secret_hash,
-            )
+        payment_token = await self.epay.obtain_payment_token(
+            invoice_id=record.invoice_id,
+            amount=record.amount,
+            currency=record.currency,
+            post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
+            failure_post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
+            secret_hash=record.secret_hash,
+        )
 
         auth_json = json.dumps(
             {
@@ -161,42 +145,24 @@ class PaymentService:
             },
             ensure_ascii=False,
         )
-        if record.payment_type == PaymentType.CARD_SAVE:
-            payment_json = json.dumps(
-                {
-                    "InvoiceID": record.invoice_id,
-                    "backLink": record.back_link,
-                    "failureBackLink": record.failure_back_link or record.back_link,
-                    "postLink": self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-                    "failurePostLink": self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-                    "language": record.language or "rus",
-                    "description": record.description,
-                    "AccountId": record.user_id,
-                    "terminal": self.epay.terminal_id,
-                    "amount": 0,
-                    "currency": "USD",
-                    "cardSave": True,
-                    "PaymentType": "cardVerification",
-                },
-                ensure_ascii=False,
-            )
-        else:
-            payment_json = json.dumps(
-                {
-                    "invoiceId": record.invoice_id,
-                    "backLink": record.back_link,
-                    "failureBackLink": record.failure_back_link or record.back_link,
-                    "postLink": self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-                    "failurePostLink": self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-                    "language": record.language or "rus",
-                    "description": record.description,
-                    "accountId": record.user_id,
-                    "terminal": self.epay.terminal_id,
-                    "amount": record.amount,
-                    "currency": record.currency,
-                },
-                ensure_ascii=False,
-            )
+        payment_json = json.dumps(
+            {
+                "invoiceId": record.invoice_id,
+                "invoiceIdAlt": record.invoice_id,
+                "backLink": record.back_link,
+                "failureBackLink": record.failure_back_link or record.back_link,
+                "postLink": self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
+                "failurePostLink": self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
+                "language": record.language or "rus",
+                "description": record.description,
+                "accountId": record.user_id,
+                "terminal": self.epay.terminal_id,
+                "amount": record.amount,
+                "currency": record.currency,
+                "cardSave": bool(record.save_card_requested),
+            },
+            ensure_ascii=False,
+        )
 
         return f"""
 <!doctype html>
@@ -215,12 +181,7 @@ class PaymentService:
       const auth = {auth_json};
       const paymentObject = {payment_json};
       paymentObject.auth = auth;
-            const isCardSave = {str(record.payment_type == PaymentType.CARD_SAVE).lower()};
-            if (isCardSave && window.halyk.cardverification) {{
-                window.halyk.cardverification(paymentObject);
-            }} else {{
-                window.halyk.pay(paymentObject);
-            }}
+            window.halyk.pay(paymentObject);
     </script>
   </body>
 </html>
@@ -367,6 +328,9 @@ class PaymentService:
             record.reason = txn.reason
             record.reason_code = int(txn.reasonCode) if txn.reasonCode else None
             record.card_id = txn.cardID
+
+            if record.save_card_requested and txn.cardID:
+                await self.user_repo.update_user(record.user_id, {"default_card_id": txn.cardID})
 
             if epay_status in ("AUTH", "CHARGE"):
                 record.status = PaymentStatus.AUTH if epay_status == "AUTH" else PaymentStatus.CHARGE
@@ -571,6 +535,9 @@ class PaymentService:
         record.reason = txn.reason
         record.reason_code = int(txn.reasonCode) if txn.reasonCode else None
         record.card_id = txn.cardID
+
+        if record.save_card_requested and txn.cardID:
+            await self.user_repo.update_user(record.user_id, {"default_card_id": txn.cardID})
 
         if epay_status == "AUTH":
             record.status = PaymentStatus.AUTH

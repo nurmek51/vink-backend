@@ -1,11 +1,15 @@
 from app.modules.esim.repository import EsimRepository
 from app.providers.esim_provider.client import EsimProviderClient
+from app.providers.epay.client import EpayClient
+from app.providers.epay.schemas import EpayCardIdPaymentRequest
+from app.core.config import settings
+from app.modules.users.repository import UserRepository
 from app.modules.esim.schemas import Esim, Tariff, UpdateSettingsRequest, UsageData
 from app.modules.users.schemas import User
 from app.common.exceptions import NotFoundError, AppError
 from app.common.mcc_codes import get_country_by_mcc
 from app.common.logging import logger
-from typing import List
+from typing import List, Optional, Tuple
 import httpx
 import uuid
 import datetime
@@ -14,9 +18,137 @@ import time
 class EsimService:
     def __init__(self):
         self.repository = EsimRepository()
+        self.user_repository = UserRepository()
         self.provider = EsimProviderClient()
+        self.epay = EpayClient()
         self._rates_cache: List[Tariff] = []
         self._rates_last_updated = 0.0
+
+    async def _maybe_trigger_autopay(
+        self,
+        user: User,
+        esim_data: dict,
+        provider_balance_mb: float,
+        current_rate_usd_per_mb: Optional[float],
+        country_name: str = "Global",
+    ) -> None:
+        if not settings.EPAY_ESIM_AUTOPAY_ENABLED:
+            return
+        if provider_balance_mb > settings.EPAY_ESIM_AUTOPAY_THRESHOLD_MB:
+            return
+        if current_rate_usd_per_mb is None or current_rate_usd_per_mb <= 0:
+            esim_data["autopay_last_status"] = "no_tariff_rate"
+            await self.repository.save_esim(esim_data)
+            return
+
+        package_mb = float(settings.EPAY_ESIM_AUTOPAY_PACKAGE_MB)
+        charge_usd = float(current_rate_usd_per_mb) * package_mb
+        charge_kzt = round(charge_usd * float(settings.EPAY_USD_TO_KZT_RATE), 2)
+        if charge_kzt <= 0:
+            esim_data["autopay_last_status"] = "invalid_tariff_rate"
+            await self.repository.save_esim(esim_data)
+            return
+
+        now_ts = time.time()
+        cooldown_seconds = max(1, settings.EPAY_ESIM_AUTOPAY_COOLDOWN_MINUTES) * 60
+        last_attempt_ts = float(esim_data.get("autopay_last_attempt_ts", 0) or 0)
+        if (now_ts - last_attempt_ts) < cooldown_seconds:
+            return
+        if esim_data.get("autopay_in_progress"):
+            return
+
+        esim_data["autopay_in_progress"] = True
+        esim_data["autopay_last_attempt_ts"] = now_ts
+        await self.repository.save_esim(esim_data)
+
+        try:
+            saved_cards = await self.epay.get_saved_cards(user.id)
+            if not saved_cards:
+                esim_data["autopay_last_status"] = "no_saved_card"
+                await self.repository.save_esim(esim_data)
+                return
+
+            selected_card = self._pick_latest_card_id(saved_cards)
+            if not selected_card:
+                esim_data["autopay_last_status"] = "no_valid_card"
+                await self.repository.save_esim(esim_data)
+                return
+
+            invoice_id = self._generate_autopay_invoice_id(esim_data.get("imsi", ""))
+            post_link = self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook")
+
+            token_resp = await self.epay.obtain_payment_token(
+                invoice_id=invoice_id,
+                amount=charge_kzt,
+                currency="KZT",
+                post_link=post_link,
+                failure_post_link=post_link,
+            )
+
+            pay_req = EpayCardIdPaymentRequest(
+                amount=charge_kzt,
+                currency="KZT",
+                name="VinkSIM AutoPay",
+                terminalId=self.epay.terminal_id,
+                invoiceId=invoice_id,
+                description=f"AutoPay 3GB {country_name} @ {current_rate_usd_per_mb:.6f} USD/MB",
+                accountId=user.id,
+                email=user.email or "",
+                phone=user.phone_number or "",
+                backLink=settings.EPAY_DEFAULT_BACK_LINK,
+                failureBackLink=settings.EPAY_DEFAULT_FAILURE_BACK_LINK,
+                postLink=post_link,
+                failurePostLink=post_link,
+                language=(user.preferred_language or "rus"),
+                paymentType="cardId",
+                recurrent=True,
+                cardId={"id": selected_card},
+            )
+
+            payment_resp = await self.epay.pay_with_saved_card(pay_req, token_resp.access_token)
+            if payment_resp.status not in ("AUTH", "CHARGE"):
+                esim_data["autopay_last_status"] = f"payment_{(payment_resp.status or 'failed').lower()}"
+                await self.repository.save_esim(esim_data)
+                return
+
+            await self.provider.top_up(esim_data["imsi"], package_mb)
+
+            esim_data["data_limit"] = float(esim_data.get("data_limit", 0.0) or 0.0) + package_mb
+            esim_data["autopay_last_status"] = "success"
+            esim_data["autopay_last_success_ts"] = now_ts
+            esim_data["autopay_last_card_id"] = selected_card
+            esim_data["autopay_last_rate_usd_per_mb"] = float(current_rate_usd_per_mb)
+            esim_data["autopay_last_amount_usd"] = round(charge_usd, 4)
+            esim_data["autopay_last_amount_kzt"] = charge_kzt
+            esim_data["autopay_last_country"] = country_name
+            await self.repository.save_esim(esim_data)
+        except Exception as exc:
+            logger.error("eSIM autopay failed for esim_id=%s: %s", esim_data.get("id"), exc)
+            esim_data["autopay_last_status"] = "error"
+            await self.repository.save_esim(esim_data)
+        finally:
+            esim_data["autopay_in_progress"] = False
+            await self.repository.save_esim(esim_data)
+
+    @staticmethod
+    def _pick_latest_card_id(cards) -> str:
+        if not cards:
+            return ""
+        # Best-effort: prefer card with latest CreatedDate, fallback to first element
+        try:
+            sorted_cards = sorted(cards, key=lambda c: c.CreatedDate or "", reverse=True)
+            return sorted_cards[0].ID
+        except Exception:
+            return cards[0].ID
+
+    @staticmethod
+    def _generate_autopay_invoice_id(imsi: str) -> str:
+        tail = (imsi or "000000")[-6:]
+        return f"{int(time.time())}{tail}"[:15]
+
+    @staticmethod
+    def _url_join(base: str, path: str) -> str:
+        return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
     async def _fetch_rates(self) -> List[Tariff]:
         # Update cache if older than 1 hour (3600 seconds)
@@ -52,6 +184,25 @@ class EsimService:
     async def get_tariffs(self) -> List[Tariff]:
         return await self._fetch_rates()
 
+    async def _resolve_country_and_rate(self, last_mcc: Optional[str]) -> Tuple[str, Optional[float]]:
+        country_name = "Global"
+        current_rate = None
+
+        if last_mcc:
+            try:
+                mapped_country = get_country_by_mcc(int(last_mcc))
+            except Exception:
+                mapped_country = "Unknown"
+
+            if mapped_country != "Unknown":
+                country_name = mapped_country
+                all_tariffs = await self.get_tariffs()
+                country_rates = [t.data_rate for t in all_tariffs if t.country_name == country_name]
+                if country_rates:
+                    current_rate = min(country_rates)
+
+        return country_name, current_rate
+
     async def get_user_esims(self, user: User) -> List[Esim]:
         # 1. Get allocated IMSIs from DB
         user_esims_data = await self.repository.get_user_esims(user.id)
@@ -86,15 +237,19 @@ class EsimService:
             # Map MCC to Country and find best rate
             country_name = "Global"
             current_rate = None
-            
             if last_mcc:
-                mapped_country = get_country_by_mcc(int(last_mcc))
+                try:
+                    mapped_country = get_country_by_mcc(int(last_mcc))
+                except Exception:
+                    mapped_country = "Unknown"
                 if mapped_country != "Unknown":
                     country_name = mapped_country
-                    # Find min rate for this country
                     country_rates = [t.data_rate for t in all_tariffs if t.country_name == country_name]
                     if country_rates:
                         current_rate = min(country_rates)
+
+            # Auto-recharge: if remaining balance <= threshold, charge tariff-derived amount and add 3GB
+            await self._maybe_trigger_autopay(user, data, provider_balance, current_rate, country_name)
 
             esim = Esim(
                 id=data["id"],
@@ -128,18 +283,7 @@ class EsimService:
         activation_code = data.get("activation_code", "UNKNOWN")
         
         last_mcc = getattr(imsi_info, "LASTMCC", None)
-        country_name = "Global"
-        current_rate = None
-        
-        if last_mcc:
-            mapped_country = get_country_by_mcc(int(last_mcc))
-            if mapped_country != "Unknown":
-                country_name = mapped_country
-                # Use cached tariffs
-                all_tariffs = await self.get_tariffs()
-                country_rates = [t.data_rate for t in all_tariffs if t.country_name == country_name]
-                if country_rates:
-                    current_rate = min(country_rates)
+        country_name, current_rate = await self._resolve_country_and_rate(last_mcc)
         
         return Esim(
             id=data["id"],
@@ -264,6 +408,11 @@ class EsimService:
         data_limit = esim_data.get("data_limit", 0.0)
         data_used = max(0.0, data_limit - current_balance)
         percentage = (data_used / data_limit * 100) if data_limit > 0 else 0.0
+
+        # Trigger autopay after usage calculation if user has low remaining data
+        last_mcc = getattr(imsi_info, "LASTMCC", None) if 'imsi_info' in locals() and imsi_info else None
+        country_name, current_rate = await self._resolve_country_and_rate(last_mcc)
+        await self._maybe_trigger_autopay(user, esim_data, float(current_balance), current_rate, country_name)
         
         return UsageData(
             esim_id=esim_id,
@@ -415,4 +564,39 @@ class EsimService:
         return {
             "total_provider_records": total_found,
             "updated_local_records": updated_count
+        }
+
+    async def run_autopay_for_esim_admin(self, esim_id: str) -> dict:
+        esim_data = await self.repository.get_esim(esim_id)
+        if not esim_data:
+            raise NotFoundError("eSIM not found")
+
+        user_id = esim_data.get("user_id")
+        if not user_id:
+            raise NotFoundError("eSIM is not assigned to a user")
+
+        user = await self.user_repository.get_user(user_id)
+        if not user:
+            raise NotFoundError("User not found")
+
+        provider_balance = 0.0
+        try:
+            imsi_info = await self.provider.get_imsi_info(esim_data["imsi"])
+            provider_balance = float(imsi_info.BALANCE) if imsi_info.BALANCE is not None else 0.0
+        except Exception:
+            pass
+
+        before_status = esim_data.get("autopay_last_status")
+        last_mcc = getattr(imsi_info, "LASTMCC", None) if 'imsi_info' in locals() and imsi_info else None
+        country_name, current_rate = await self._resolve_country_and_rate(last_mcc)
+        await self._maybe_trigger_autopay(user, esim_data, provider_balance, current_rate, country_name)
+        refreshed = await self.repository.get_esim(esim_id)
+
+        return {
+            "esim_id": esim_id,
+            "user_id": user_id,
+            "provider_balance_mb": provider_balance,
+            "autopay_last_status_before": before_status,
+            "autopay_last_status_after": refreshed.get("autopay_last_status") if refreshed else None,
+            "autopay_last_success_ts": refreshed.get("autopay_last_success_ts") if refreshed else None,
         }

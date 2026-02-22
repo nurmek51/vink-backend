@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     EPAY_CHECKOUT_BASE_URL: str = "https://nurmek.site"  # URL clients open for hosted checkout page
     EPAY_DEFAULT_BACK_LINK: str = "https://nurmek.site/payment/success"
     EPAY_DEFAULT_FAILURE_BACK_LINK: str = "https://nurmek.site/payment/failure"
+    EPAY_ESIM_AUTOPAY_ENABLED: bool = True
+    EPAY_ESIM_AUTOPAY_THRESHOLD_MB: float = 51.0
+    EPAY_ESIM_AUTOPAY_PACKAGE_MB: float = 3072.0
+    EPAY_USD_TO_KZT_RATE: float = 516.5
+    EPAY_ESIM_AUTOPAY_COOLDOWN_MINUTES: int = 60
 
     model_config = SettingsConfigDict(
         env_file=".env", 

@@ -72,10 +72,13 @@ Request (one-time top-up):
 Request (save card):
 ```json
 {
+  "amount": 5,
   "save_card": true,
   "language": "rus"
 }
 ```
+
+`save_card=true` means paid top-up + card saving in the same acquiring transaction.
 
 Notes:
 - back_link and failure_back_link are no longer passed by client.
@@ -121,6 +124,14 @@ Request:
   "currency": "KZT"
 }
 ```
+
+#### Automatic eSIM recurrent top-up
+
+When eSIM remaining data is <= 51MB, backend automatically:
+1. Charges the user's saved card.
+2. Tops up 3072MB (3GB) to that eSIM.
+
+Threshold/package/amount are configurable via env.
 
 #### Saved cards
 

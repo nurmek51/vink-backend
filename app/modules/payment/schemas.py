@@ -49,6 +49,7 @@ class PaymentRecord(BaseModel):
     back_link: Optional[str] = None
     failure_back_link: Optional[str] = None
     language: Optional[str] = None
+    save_card_requested: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: Optional[datetime] = None
 
@@ -59,15 +60,15 @@ class PaymentRecord(BaseModel):
 
 class InitiatePaymentRequest(BaseModel):
     """Client requests a payment session (one-time top-up)."""
-    amount: Optional[float] = Field(None, gt=0, description="Amount in KZT (required when save_card=false)")
+    amount: Optional[float] = Field(None, gt=0, description="Amount in KZT")
     description: str = Field("Top-up", max_length=125)
     save_card: bool = Field(False, description="If true, initiates card verification/saving flow")
     language: str = Field("rus", pattern="^(rus|kaz|eng)$")
 
     @model_validator(mode="after")
     def validate_amount_for_non_card_save(self):
-        if not self.save_card and self.amount is None:
-            raise ValueError("amount is required when save_card is false")
+        if self.amount is None:
+            raise ValueError("amount is required")
         return self
 
 
@@ -76,6 +77,7 @@ class InitiatePaymentResponse(BaseModel):
     invoice_id: str
     payment_id: str
     payment_type: PaymentType
+    save_card: bool
     checkout_url: str
     auth: dict  # Full token object to pass into halyk.pay()
     payment_page_url: str
