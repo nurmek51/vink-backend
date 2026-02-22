@@ -12,6 +12,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.users.router import router as users_router
 from app.modules.esim.router import router as esim_router
 from app.modules.wallet.router import router as wallet_router
+from app.modules.payment.router import router as payment_router
 from app.infrastructure.firestore import init_firestore
 from app.common.responses import ErrorResponse, ErrorDetail
 from contextlib import asynccontextmanager
@@ -51,6 +52,7 @@ app.include_router(auth_router, prefix=settings.API_V1_STR, tags=["Auth"])
 app.include_router(users_router, prefix=settings.API_V1_STR, tags=["Users"])
 app.include_router(esim_router, prefix=settings.API_V1_STR, tags=["eSIM"])
 app.include_router(wallet_router, prefix=settings.API_V1_STR, tags=["Wallet"])
+app.include_router(payment_router, prefix=settings.API_V1_STR, tags=["Payments"])
 
 @app.get("/")
 async def root():

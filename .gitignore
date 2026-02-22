@@ -108,6 +108,9 @@ venv.bak/
 input.md
 vink-server-documentation.md
 API_INTEGRATION.md
+.github/instructions/ePay.instructions.md
+EPAY_FRONTEND_GUIDE.md
+EPAY_CHANGELOG.md
 
 # mypy
 .mypy_cache/
