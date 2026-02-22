@@ -19,6 +19,7 @@ from app.modules.payment.schemas import (
 from app.modules.payment.service import PaymentService
 from app.common.responses import DataResponse
 from app.common.logging import logger
+from app.common.exceptions import AppError
 
 router = APIRouter()
 
@@ -218,7 +219,7 @@ async def epay_webhook(request: Request, service: PaymentService = Depends(_get_
 async def admin_charge_payment(
     payment_id: str,
     body: Optional[ChargeRequest] = None,
-    _admin: str = Depends(require_admin_api_key),
+    _admin: dict = Depends(require_admin_api_key),
     service: PaymentService = Depends(_get_service),
 ):
     record = await service.charge_payment(payment_id, body.amount if body else None)
@@ -232,7 +233,7 @@ async def admin_charge_payment(
 async def admin_refund_payment(
     payment_id: str,
     body: Optional[RefundRequest] = None,
-    _admin: str = Depends(require_admin_api_key),
+    _admin: dict = Depends(require_admin_api_key),
     service: PaymentService = Depends(_get_service),
 ):
     record = await service.refund_payment(payment_id, body.amount if body else None)
@@ -245,8 +246,43 @@ async def admin_refund_payment(
 )
 async def admin_verify_payment(
     invoice_id: str,
-    _admin: str = Depends(require_admin_api_key),
+    _admin: dict = Depends(require_admin_api_key),
     service: PaymentService = Depends(_get_service),
 ):
     result = await service.verify_payment_from_epay(invoice_id)
     return DataResponse(data=result, message="Status retrieved from ePay")
+
+
+@router.get(
+    "/admin/payments/health",
+    summary="Admin health check for ePay connectivity",
+)
+async def admin_payments_health(
+    _admin: dict = Depends(require_admin_api_key),
+    service: PaymentService = Depends(_get_service),
+):
+    probe_invoice_id = "000000001"
+    try:
+        probe = await service.verify_payment_from_epay(probe_invoice_id)
+        return DataResponse(
+            data={
+                "admin_auth_mode": _admin.get("mode"),
+                "epay_reachable": True,
+                "probe_invoice_id": probe_invoice_id,
+                "probe_result": {
+                    "resultCode": probe.get("resultCode"),
+                    "resultMessage": probe.get("resultMessage"),
+                },
+            },
+            message="Health check completed",
+        )
+    except AppError as exc:
+        return DataResponse(
+            data={
+                "admin_auth_mode": _admin.get("mode"),
+                "epay_reachable": False,
+                "probe_invoice_id": probe_invoice_id,
+                "error": exc.detail,
+            },
+            message="Health check completed with connectivity issue",
+        )

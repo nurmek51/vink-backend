@@ -45,12 +45,20 @@ def require_app_permission(app_name: str):
 X_API_KEY = APIKeyHeader(name="X-Admin-API-Key", auto_error=True)
 
 def require_admin_api_key(api_key: str = Depends(X_API_KEY)):    
-    # 2. Check if the provided key is already the correct hash
-    if api_key == settings.ADMIN_API_KEY_HASH:
-        return api_key
-        
-    # 3. Check if the hash of the provided key matches the stored ADMIN_API_KEY_HASH
-    if hashlib.sha256(api_key.encode()).hexdigest() == settings.ADMIN_API_KEY_HASH:
-        return api_key
-        
+    incoming = (api_key or "").strip().strip('"').strip("'")
+    stored_plain = (settings.ADMIN_API_KEY or "").strip().strip('"').strip("'")
+    stored_hash = (settings.ADMIN_API_KEY_HASH or "").strip().strip('"').strip("'")
+
+    # 1) Accept exact plain key from env
+    if incoming and stored_plain and incoming == stored_plain:
+        return {"mode": "plain", "value": api_key}
+
+    # 2) Accept exact hash from env
+    if incoming and stored_hash and incoming == stored_hash:
+        return {"mode": "hash", "value": api_key}
+
+    # 3) Accept plain key that hashes to stored hash
+    if incoming and stored_hash and hashlib.sha256(incoming.encode()).hexdigest() == stored_hash:
+        return {"mode": "plain->hash", "value": api_key}
+
     raise UnauthorizedError("Invalid Admin API Key")

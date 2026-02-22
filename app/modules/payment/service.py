@@ -337,7 +337,18 @@ class PaymentService:
         previous_status = record.status
 
         # Verify with ePay regardless of callback code
-        status_resp = await self.epay.check_transaction_status(payload.invoiceId)
+        try:
+            status_resp = await self.epay.check_transaction_status(payload.invoiceId)
+        except AppError as exc:
+            logger.warning(
+                "Webhook verify skipped (temporary ePay failure) invoice=%s error=%s",
+                payload.invoiceId,
+                exc.detail.get("message") if isinstance(exc.detail, dict) else str(exc),
+            )
+            record.reason = "verification_unavailable"
+            record.reason_code = -31
+            await self.repo.update_payment(record)
+            return
 
         if status_resp.resultCode == "100" and status_resp.transaction:
             txn = status_resp.transaction
@@ -529,7 +540,17 @@ class PaymentService:
         logger.info("User %s balance updated: %.2f → %.2f", user_id, user.balance, new_balance)
 
     async def _sync_payment_status_from_epay(self, record: PaymentRecord) -> PaymentRecord:
-        status_resp = await self.epay.check_transaction_status(record.invoice_id)
+        try:
+            status_resp = await self.epay.check_transaction_status(record.invoice_id)
+        except AppError as exc:
+            logger.warning(
+                "Status sync skipped (temporary ePay failure) payment=%s invoice=%s error=%s",
+                record.id,
+                record.invoice_id,
+                exc.detail.get("message") if isinstance(exc.detail, dict) else str(exc),
+            )
+            return record
+
         if status_resp.resultCode != "100" or not status_resp.transaction:
             return record
 
