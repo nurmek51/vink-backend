@@ -322,8 +322,22 @@ class PaymentService:
                 payload.invoiceId,
                 exc.detail.get("message") if isinstance(exc.detail, dict) else str(exc),
             )
-            record.reason = "verification_unavailable"
-            record.reason_code = -31
+
+            # Fallback: accept provider callback as source-of-truth on explicit success
+            if payload.code.lower() == "ok" and int(payload.reasonCode) == 0:
+                record.epay_transaction_id = payload.id
+                record.card_mask = payload.cardMask
+                record.card_type = payload.cardType
+                record.reference = payload.reference
+                record.reason = payload.reason
+                record.reason_code = payload.reasonCode
+                record.card_id = payload.cardId
+                record.status = PaymentStatus.CHARGE
+                await self._apply_success_effect(record, previous_status=previous_status)
+            else:
+                record.reason = "verification_unavailable"
+                record.reason_code = -31
+
             await self.repo.update_payment(record)
             return
 

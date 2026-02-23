@@ -1,5 +1,6 @@
 import httpx
 import time
+import asyncio
 from typing import Optional, List
 
 from app.core.config import settings
@@ -28,9 +29,13 @@ class EpayClient:
     def __init__(self) -> None:
         self.oauth_url: str = settings.EPAY_OAUTH_URL
         self.api_url: str = settings.EPAY_API_URL
+        self.oauth_fallback_url: Optional[str] = settings.EPAY_OAUTH_FALLBACK_URL
+        self.api_fallback_url: Optional[str] = settings.EPAY_API_FALLBACK_URL
         self.client_id: str = settings.EPAY_CLIENT_ID
         self.client_secret: str = settings.EPAY_CLIENT_SECRET
         self.terminal_id: str = settings.EPAY_TERMINAL_ID
+        self.timeout_seconds: float = float(settings.EPAY_HTTP_TIMEOUT_SECONDS)
+        self.retries: int = max(1, int(settings.EPAY_HTTP_RETRIES))
 
         # Cached service-level token (client_credentials, scope=webapi …)
         self._service_token: Optional[str] = None
@@ -50,8 +55,9 @@ class EpayClient:
             "scope": "webapi usermanagement email_send verification statement statistics payment",
             "client_id": self.client_id,
             "client_secret": self.client_secret,
+            "terminal": self.terminal_id,
         }
-        data = await self._post_form(self.oauth_url, form, auth_header=None)
+        data = await self._post_form(self._oauth_urls(), form, auth_header=None)
         resp = EpayTokenResponse(**data)
         self._service_token = resp.access_token
         self._service_token_expires_at = time.time() + resp.expires_in
@@ -85,7 +91,7 @@ class EpayClient:
         if secret_hash:
             form["secret_hash"] = secret_hash
 
-        data = await self._post_form(self.oauth_url, form, auth_header=None)
+        data = await self._post_form(self._oauth_urls(), form, auth_header=None)
         resp = EpayTokenResponse(**data)
         logger.info(
             "ePay payment token obtained for invoice=%s amount=%s",
@@ -116,7 +122,7 @@ class EpayClient:
         if failure_post_link:
             form["failurePostLink"] = failure_post_link
 
-        data = await self._post_form(self.oauth_url, form, auth_header=None)
+        data = await self._post_form(self._oauth_urls(), form, auth_header=None)
         resp = EpayTokenResponse(**data)
         logger.info("ePay card-save token obtained for invoice=%s", invoice_id)
         return resp
@@ -128,8 +134,10 @@ class EpayClient:
     async def check_transaction_status(self, invoice_id: str) -> EpayStatusResponse:
         """GET /check-status/payment/transaction/:invoiceid"""
         token = await self._obtain_service_token()
-        url = f"{self.api_url}/check-status/payment/transaction/{invoice_id}"
-        data = await self._get_json(url, token)
+        data = await self._get_json(
+            self._api_urls_with_path(f"/check-status/payment/transaction/{invoice_id}"),
+            token,
+        )
         resp = EpayStatusResponse(**data)
         logger.info(
             "ePay status for invoice=%s → code=%s msg=%s",
@@ -148,11 +156,14 @@ class EpayClient:
     ) -> None:
         """POST /operation/:id/charge — full or partial charge."""
         token = await self._obtain_service_token()
-        url = f"{self.api_url}/operation/{transaction_id}/charge"
         body = {}
         if amount is not None:
             body["amount"] = amount
-        await self._post_json(url, body or None, token)
+        await self._post_json(
+            self._api_urls_with_path(f"/operation/{transaction_id}/charge"),
+            body or None,
+            token,
+        )
         logger.info(
             "ePay charge completed for txn=%s amount=%s",
             transaction_id,
@@ -168,11 +179,14 @@ class EpayClient:
     ) -> None:
         """POST /operation/:id/refund — full or partial refund."""
         token = await self._obtain_service_token()
-        url = f"{self.api_url}/operation/{transaction_id}/refund"
         body = {}
         if amount is not None:
             body["amount"] = amount
-        await self._post_json(url, body or None, token)
+        await self._post_json(
+            self._api_urls_with_path(f"/operation/{transaction_id}/refund"),
+            body or None,
+            token,
+        )
         logger.info(
             "ePay refund completed for txn=%s amount=%s",
             transaction_id,
@@ -186,8 +200,10 @@ class EpayClient:
     async def get_saved_cards(self, account_id: str) -> List[EpaySavedCard]:
         """GET /cards/:accountId"""
         token = await self._obtain_service_token()
-        url = f"{self.api_url}/cards/{account_id}"
-        data = await self._get_json(url, token)
+        data = await self._get_json(
+            self._api_urls_with_path(f"/cards/{account_id}"),
+            token,
+        )
         if isinstance(data, dict) and "code" in data:
             # ePay returns {"code":1373,"message":"…"} when no cards
             logger.info("ePay no saved cards for account=%s", account_id)
@@ -197,8 +213,11 @@ class EpayClient:
     async def deactivate_card(self, card_id: str) -> dict:
         """POST /card/deactivate/:cardID"""
         token = await self._obtain_service_token()
-        url = f"{self.api_url}/card/deactivate/{card_id}"
-        data = await self._post_json(url, None, token)
+        data = await self._post_json(
+            self._api_urls_with_path(f"/card/deactivate/{card_id}"),
+            None,
+            token,
+        )
         logger.info("ePay card deactivated: %s", card_id)
         return data
 
@@ -210,8 +229,11 @@ class EpayClient:
         self, request: EpayCardIdPaymentRequest, token: str
     ) -> EpayCardIdPaymentResponse:
         """POST /payments/cards/auth — server-to-server card payment."""
-        url = f"{self.api_url}/payments/cards/auth"
-        data = await self._post_json(url, request.dict(), token)
+        data = await self._post_json(
+            self._api_urls_with_path("/payments/cards/auth"),
+            request.dict(),
+            token,
+        )
         resp = EpayCardIdPaymentResponse(**data)
         logger.info(
             "ePay cardId payment: invoice=%s status=%s",
@@ -225,71 +247,109 @@ class EpayClient:
     # ------------------------------------------------------------------
 
     async def _post_form(
-        self, url: str, form: dict, auth_header: Optional[str]
+        self, urls: List[str], form: dict, auth_header: Optional[str]
     ) -> dict:
         headers = {}
         if auth_header:
             headers["Authorization"] = f"Bearer {auth_header}"
 
-        logger.info("ePay POST (form) → %s", url)
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            try:
-                resp = await client.post(url, data=form, headers=headers)
-                resp.raise_for_status()
-                return resp.json()
-            except httpx.HTTPStatusError as exc:
-                logger.error(
-                    "ePay HTTP error: %s %s — %s",
-                    exc.response.status_code,
-                    url,
-                    exc.response.text[:500],
-                )
-                raise AppError(502, f"ePay error: {exc.response.status_code}")
-            except httpx.HTTPError as exc:
-                logger.error("ePay network error: %s — %s", url, exc)
-                raise AppError(502, "ePay gateway unreachable")
+        last_error: Optional[Exception] = None
+        for url in urls:
+            for attempt in range(1, self.retries + 1):
+                logger.info("ePay POST (form) → %s (attempt %s/%s)", url, attempt, self.retries)
+                async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                    try:
+                        resp = await client.post(url, data=form, headers=headers)
+                        resp.raise_for_status()
+                        return resp.json()
+                    except httpx.HTTPStatusError as exc:
+                        logger.error(
+                            "ePay HTTP error: %s %s — %s",
+                            exc.response.status_code,
+                            url,
+                            exc.response.text[:500],
+                        )
+                        # HTTP status error is final for this URL (no point retrying with same payload many times)
+                        raise AppError(502, f"ePay error: {exc.response.status_code}")
+                    except httpx.HTTPError as exc:
+                        last_error = exc
+                        logger.warning("ePay network error: %s — %s", url, exc)
+                        if attempt < self.retries:
+                            await self._sleep_backoff(attempt)
+
+        logger.error("ePay gateway unreachable for all oauth URLs: %s", urls)
+        raise AppError(502, "ePay gateway unreachable")
 
     async def _post_json(
-        self, url: str, body: Optional[dict], token: str
+        self, urls: List[str], body: Optional[dict], token: str
     ) -> dict:
         headers = {"Authorization": f"Bearer {token}"}
-        logger.info("ePay POST (json) → %s", url)
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            try:
-                resp = await client.post(url, json=body, headers=headers)
-                resp.raise_for_status()
-                try:
-                    return resp.json()
-                except Exception:
-                    return {"raw": resp.text}
-            except httpx.HTTPStatusError as exc:
-                logger.error(
-                    "ePay HTTP error: %s %s — %s",
-                    exc.response.status_code,
-                    url,
-                    exc.response.text[:500],
-                )
-                raise AppError(502, f"ePay error: {exc.response.status_code}")
-            except httpx.HTTPError as exc:
-                logger.error("ePay network error: %s — %s", url, exc)
-                raise AppError(502, "ePay gateway unreachable")
+        for url in urls:
+            for attempt in range(1, self.retries + 1):
+                logger.info("ePay POST (json) → %s (attempt %s/%s)", url, attempt, self.retries)
+                async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                    try:
+                        resp = await client.post(url, json=body, headers=headers)
+                        resp.raise_for_status()
+                        try:
+                            return resp.json()
+                        except Exception:
+                            return {"raw": resp.text}
+                    except httpx.HTTPStatusError as exc:
+                        logger.error(
+                            "ePay HTTP error: %s %s — %s",
+                            exc.response.status_code,
+                            url,
+                            exc.response.text[:500],
+                        )
+                        raise AppError(502, f"ePay error: {exc.response.status_code}")
+                    except httpx.HTTPError as exc:
+                        logger.warning("ePay network error: %s — %s", url, exc)
+                        if attempt < self.retries:
+                            await self._sleep_backoff(attempt)
 
-    async def _get_json(self, url: str, token: str) -> dict:
+        logger.error("ePay gateway unreachable for all api URLs: %s", urls)
+        raise AppError(502, "ePay gateway unreachable")
+
+    async def _get_json(self, urls: List[str], token: str) -> dict:
         headers = {"Authorization": f"Bearer {token}"}
-        logger.info("ePay GET → %s", url)
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            try:
-                resp = await client.get(url, headers=headers)
-                resp.raise_for_status()
-                return resp.json()
-            except httpx.HTTPStatusError as exc:
-                logger.error(
-                    "ePay HTTP error: %s %s — %s",
-                    exc.response.status_code,
-                    url,
-                    exc.response.text[:500],
-                )
-                raise AppError(502, f"ePay error: {exc.response.status_code}")
-            except httpx.HTTPError as exc:
-                logger.error("ePay network error: %s — %s", url, exc)
-                raise AppError(502, "ePay gateway unreachable")
+        for url in urls:
+            for attempt in range(1, self.retries + 1):
+                logger.info("ePay GET → %s (attempt %s/%s)", url, attempt, self.retries)
+                async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                    try:
+                        resp = await client.get(url, headers=headers)
+                        resp.raise_for_status()
+                        return resp.json()
+                    except httpx.HTTPStatusError as exc:
+                        logger.error(
+                            "ePay HTTP error: %s %s — %s",
+                            exc.response.status_code,
+                            url,
+                            exc.response.text[:500],
+                        )
+                        raise AppError(502, f"ePay error: {exc.response.status_code}")
+                    except httpx.HTTPError as exc:
+                        logger.warning("ePay network error: %s — %s", url, exc)
+                        if attempt < self.retries:
+                            await self._sleep_backoff(attempt)
+
+        logger.error("ePay gateway unreachable for all api URLs: %s", urls)
+        raise AppError(502, "ePay gateway unreachable")
+
+    def _oauth_urls(self) -> List[str]:
+        urls = [self.oauth_url]
+        if self.oauth_fallback_url:
+            urls.append(self.oauth_fallback_url)
+        return urls
+
+    def _api_urls_with_path(self, path: str) -> List[str]:
+        bases = [self.api_url]
+        if self.api_fallback_url:
+            bases.append(self.api_fallback_url)
+        return [f"{base.rstrip('/')}/{path.lstrip('/')}" for base in bases]
+
+    @staticmethod
+    async def _sleep_backoff(attempt: int) -> None:
+        delay = min(3.0, 0.35 * (2 ** (attempt - 1)))
+        await asyncio.sleep(delay)

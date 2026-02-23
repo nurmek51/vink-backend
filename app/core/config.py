@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     # ePay (Halyk Bank)
     EPAY_OAUTH_URL: str = "https://testoauth.homebank.kz/epay2/oauth2/token"
     EPAY_API_URL: str = "https://testepay.homebank.kz/api"
+    EPAY_OAUTH_FALLBACK_URL: Optional[str] = "https://test-epay-oauth.epayment.kz/oauth2/token"
+    EPAY_API_FALLBACK_URL: Optional[str] = None
     EPAY_PAYMENT_PAGE_JS: str = "https://test-epay.epayment.kz/payform/payment-api.js"
     EPAY_CLIENT_ID: str = "test"
     EPAY_CLIENT_SECRET: str = "yF587AV9Ms94qN2QShFzVR3vFnWkhjbAK3sG"
@@ -53,6 +55,8 @@ class Settings(BaseSettings):
     EPAY_ESIM_AUTOPAY_PACKAGE_MB: float = 3072.0
     EPAY_USD_TO_KZT_RATE: float = 516.5
     EPAY_ESIM_AUTOPAY_COOLDOWN_MINUTES: int = 60
+    EPAY_HTTP_TIMEOUT_SECONDS: float = 40.0
+    EPAY_HTTP_RETRIES: int = 3
 
     model_config = SettingsConfigDict(
         env_file=".env", 

@@ -169,7 +169,12 @@ async def epay_webhook(request: Request, service: PaymentService = Depends(_get_
             form = await request.form()
             body = dict(form)
 
-        logger.info("ePay webhook raw body: %s", body)
+        logger.info(
+            "ePay webhook parsed: invoiceId=%s code=%s reasonCode=%s",
+            body.get("invoiceId") or body.get("invoiceID"),
+            body.get("code"),
+            body.get("reasonCode"),
+        )
         await service.handle_webhook_raw(body)
     except Exception as exc:
         logger.exception("Webhook processing failed: %s", exc)
