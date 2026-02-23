@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Request, Query
 from typing import List, Optional
 from fastapi.responses import HTMLResponse
+import json
 
 from app.core.dependencies import require_app_permission, require_admin_api_key
 from app.modules.users.schemas import User
@@ -148,18 +149,32 @@ async def epay_webhook(request: Request, service: PaymentService = Depends(_get_
         request.headers.get("user-agent"),
         request.client.host if request.client else "unknown",
     )
+
+    body = {}
     try:
-        if "application/json" in content_type:
-            body = await request.json()
-        else:
+        raw_bytes = await request.body()
+        raw_text = raw_bytes.decode("utf-8", errors="ignore").strip() if raw_bytes else ""
+
+        # Prefer JSON decode regardless of content-type (ePay may send non-standard headers)
+        if raw_text:
+            try:
+                parsed = json.loads(raw_text)
+                if isinstance(parsed, dict):
+                    body = parsed
+            except Exception:
+                body = {}
+
+        # Fallback to form parsing when JSON decode didn't produce a dict
+        if not body:
             form = await request.form()
             body = dict(form)
+
         logger.info("ePay webhook raw body: %s", body)
         await service.handle_webhook_raw(body)
     except Exception as exc:
         logger.exception("Webhook processing failed: %s", exc)
-        # Return 200 to avoid aggressive retries by provider while we inspect logs
-        return {"status": "error", "message": "logged"}
+        # Keep HTTP 200 ACK contract for provider callbacks
+        return {"status": "ok"}
 
     # ePay expects HTTP 200 to acknowledge receipt
     return {"status": "ok"}
