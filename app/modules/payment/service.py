@@ -345,6 +345,8 @@ class PaymentService:
                 record.reason_code = payload.reasonCode
                 record.card_id = payload.cardId
                 record.status = PaymentStatus.CHARGE
+                if record.save_card_requested and payload.cardId:
+                    await self.user_repo.update_user(record.user_id, {"default_card_id": payload.cardId})
                 try:
                     await self._apply_success_effect(record, previous_status=previous_status)
                 except Exception as exc:
@@ -408,20 +410,28 @@ class PaymentService:
     # ------------------------------------------------------------------
 
     async def get_saved_cards(self, user_id: str) -> List[SavedCardOut]:
-        epay_cards = await self._call_epay_with_deadline(
-            self.epay.get_saved_cards(user_id),
-            operation=f"saved-cards account={user_id}",
-        )
-        return [
-            SavedCardOut(
-                id=c.ID,
-                card_mask=c.CardMask or "",
-                card_type=None,
-                payer_name=c.PayerName,
-                created_date=c.CreatedDate,
+        try:
+            epay_cards = await self._call_epay_with_deadline(
+                self.epay.get_saved_cards(user_id),
+                operation=f"saved-cards account={user_id}",
             )
-            for c in epay_cards
-        ]
+            return [
+                SavedCardOut(
+                    id=c.ID,
+                    card_mask=c.CardMask or "",
+                    card_type=None,
+                    payer_name=c.PayerName,
+                    created_date=c.CreatedDate,
+                )
+                for c in epay_cards
+            ]
+        except AppError as exc:
+            logger.warning(
+                "Saved-cards fallback to local cache user=%s error=%s",
+                user_id,
+                exc.detail.get("message") if isinstance(exc.detail, dict) else str(exc),
+            )
+            return await self._get_local_saved_cards_fallback(user_id)
 
     async def deactivate_card(self, user_id: str, card_id: str) -> dict:
         return await self._call_epay_with_deadline(
@@ -609,6 +619,14 @@ class PaymentService:
                 exc.detail.get("message") if isinstance(exc.detail, dict) else str(exc),
             )
             return record
+        except Exception as exc:
+            logger.exception(
+                "Status sync unexpected error skipped payment=%s invoice=%s error=%s",
+                record.id,
+                record.invoice_id,
+                str(exc),
+            )
+            return record
 
         if status_resp.resultCode != "100" or not status_resp.transaction:
             return record
@@ -678,3 +696,28 @@ class PaymentService:
                 settings.EPAY_REQUEST_DEADLINE_SECONDS,
             )
             raise AppError(502, "ePay request timed out")
+
+    async def _get_local_saved_cards_fallback(self, user_id: str) -> List[SavedCardOut]:
+        records = await self.repo.list_payments(user_id, limit=200)
+        seen: set[str] = set()
+        cards: List[SavedCardOut] = []
+
+        for record in records:
+            if record.status not in (PaymentStatus.AUTH, PaymentStatus.CHARGE):
+                continue
+            if not record.card_id:
+                continue
+            if record.card_id in seen:
+                continue
+            seen.add(record.card_id)
+            cards.append(
+                SavedCardOut(
+                    id=record.card_id,
+                    card_mask=record.card_mask or "",
+                    card_type=record.card_type,
+                    payer_name=None,
+                    created_date=record.created_at.isoformat() if record.created_at else None,
+                )
+            )
+
+        return cards

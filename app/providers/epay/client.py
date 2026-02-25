@@ -261,7 +261,11 @@ class EpayClient:
                     try:
                         resp = await client.post(url, data=form, headers=headers)
                         resp.raise_for_status()
-                        return resp.json()
+                        try:
+                            return resp.json()
+                        except Exception as exc:
+                            logger.error("ePay invalid JSON response: %s %s", url, str(exc))
+                            raise AppError(502, "ePay invalid response")
                     except httpx.HTTPStatusError as exc:
                         status_code = exc.response.status_code
                         logger.error(
@@ -282,6 +286,14 @@ class EpayClient:
                         logger.warning("ePay network error: %s — %s", url, exc)
                         if attempt < self.retries:
                             await self._sleep_backoff(attempt)
+                    except AppError:
+                        raise
+                    except Exception as exc:
+                        logger.exception("ePay unexpected error: %s %s", url, str(exc))
+                        if attempt < self.retries:
+                            await self._sleep_backoff(attempt)
+                            continue
+                        break
 
         logger.error("ePay gateway unreachable for all oauth URLs: %s", urls)
         raise AppError(502, "ePay gateway unreachable")
@@ -319,6 +331,14 @@ class EpayClient:
                         logger.warning("ePay network error: %s — %s", url, exc)
                         if attempt < self.retries:
                             await self._sleep_backoff(attempt)
+                    except AppError:
+                        raise
+                    except Exception as exc:
+                        logger.exception("ePay unexpected error: %s %s", url, str(exc))
+                        if attempt < self.retries:
+                            await self._sleep_backoff(attempt)
+                            continue
+                        break
 
         logger.error("ePay gateway unreachable for all api URLs: %s", urls)
         raise AppError(502, "ePay gateway unreachable")
@@ -332,7 +352,11 @@ class EpayClient:
                     try:
                         resp = await client.get(url, headers=headers)
                         resp.raise_for_status()
-                        return resp.json()
+                        try:
+                            return resp.json()
+                        except Exception as exc:
+                            logger.error("ePay invalid JSON response: %s %s", url, str(exc))
+                            raise AppError(502, "ePay invalid response")
                     except httpx.HTTPStatusError as exc:
                         status_code = exc.response.status_code
                         logger.error(
@@ -351,6 +375,14 @@ class EpayClient:
                         logger.warning("ePay network error: %s — %s", url, exc)
                         if attempt < self.retries:
                             await self._sleep_backoff(attempt)
+                    except AppError:
+                        raise
+                    except Exception as exc:
+                        logger.exception("ePay unexpected error: %s %s", url, str(exc))
+                        if attempt < self.retries:
+                            await self._sleep_backoff(attempt)
+                            continue
+                        break
 
         logger.error("ePay gateway unreachable for all api URLs: %s", urls)
         raise AppError(502, "ePay gateway unreachable")
