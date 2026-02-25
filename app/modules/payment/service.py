@@ -221,12 +221,15 @@ class PaymentService:
         back_link = f"{settings.EPAY_POSTLINK_BASE_URL}/api/v1/payments/status/{payment_id}"
 
         # Obtain payment token for the recurrent charge
-        token_resp = await self.epay.obtain_payment_token(
-            invoice_id=invoice_id,
-            amount=req.amount,
-            currency=req.currency,
-            post_link=post_link,
-            failure_post_link=failure_post_link,
+        token_resp = await self._call_epay_with_deadline(
+            self.epay.obtain_payment_token(
+                invoice_id=invoice_id,
+                amount=req.amount,
+                currency=req.currency,
+                post_link=post_link,
+                failure_post_link=failure_post_link,
+            ),
+            operation=f"recurrent-token invoice={invoice_id}",
         )
 
         epay_req = EpayCardIdPaymentRequest(
@@ -265,7 +268,10 @@ class PaymentService:
         await self.repo.create_payment(record)
         await self.repo.create_invoice_mapping(invoice_id, user_id, payment_id)
 
-        epay_resp = await self.epay.pay_with_saved_card(epay_req, token_resp.access_token)
+        epay_resp = await self._call_epay_with_deadline(
+            self.epay.pay_with_saved_card(epay_req, token_resp.access_token),
+            operation=f"recurrent-auth invoice={invoice_id}",
+        )
 
         requires_3ds = epay_resp.status == "3D"
         if epay_resp.status == "AUTH" or epay_resp.status == "CHARGE":

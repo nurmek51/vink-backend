@@ -117,6 +117,10 @@ Endpoint: GET /payments/status/{payment_id}?sync=true
 
 Endpoint: POST /payments/recurrent
 
+Behavior notes:
+- Backend now applies a strict ePay deadline (`EPAY_REQUEST_DEADLINE_SECONDS`) for recurrent token/auth requests.
+- If ePay is slow/unreachable, API returns controlled JSON error (`502`) instead of hanging until proxy timeout (`504`).
+
 Request:
 ```json
 {
@@ -141,11 +145,17 @@ Threshold/package/amount are configurable via env.
 - GET /payments/saved-cards
 - DELETE /payments/saved-cards/{card_id}
 
+Behavior notes:
+- Primary source is ePay `/cards/:accountId`.
+- If ePay is temporarily unavailable, backend returns a local fallback list built from successful historical payments (`AUTH`/`CHARGE` with `card_id`).
+
 #### Webhook
 
 Endpoint: POST /payments/webhook
 
 Webhook verifies status with ePay and updates payment state. For successful one-time/recurrent payments, user balance is increased once (idempotent).
+
+If status verification is temporarily unavailable but callback indicates success (`code=ok`, `reasonCode=0`), backend marks payment as successful and stores card linkage for save-card flows.
 
 ### 1. Authentication APIs
 
