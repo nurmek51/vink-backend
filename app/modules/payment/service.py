@@ -272,7 +272,15 @@ class PaymentService:
             record.epay_transaction_id = epay_resp.id
             record.reference = epay_resp.reference
             record.card_id = epay_resp.cardID
-            await self._apply_success_effect(record, previous_status=PaymentStatus.PENDING)
+            try:
+                await self._apply_success_effect(record, previous_status=PaymentStatus.PENDING)
+            except Exception as exc:
+                logger.exception(
+                    "Recurrent payment success side-effect failed payment=%s invoice=%s error=%s",
+                    record.id,
+                    record.invoice_id,
+                    str(exc),
+                )
             await self.repo.update_payment(record)
         elif requires_3ds:
             record.epay_transaction_id = epay_resp.id
@@ -333,7 +341,15 @@ class PaymentService:
                 record.reason_code = payload.reasonCode
                 record.card_id = payload.cardId
                 record.status = PaymentStatus.CHARGE
-                await self._apply_success_effect(record, previous_status=previous_status)
+                try:
+                    await self._apply_success_effect(record, previous_status=previous_status)
+                except Exception as exc:
+                    logger.exception(
+                        "Webhook fallback success side-effect failed payment=%s invoice=%s error=%s",
+                        record.id,
+                        record.invoice_id,
+                        str(exc),
+                    )
             else:
                 record.reason = "verification_unavailable"
                 record.reason_code = -31
@@ -360,7 +376,15 @@ class PaymentService:
                 record.status = PaymentStatus.AUTH if epay_status == "AUTH" else PaymentStatus.CHARGE
 
                 # Credit user balance for one-time / recurrent payments
-                await self._apply_success_effect(record, previous_status=previous_status)
+                try:
+                    await self._apply_success_effect(record, previous_status=previous_status)
+                except Exception as exc:
+                    logger.exception(
+                        "Webhook success side-effect failed payment=%s invoice=%s error=%s",
+                        record.id,
+                        record.invoice_id,
+                        str(exc),
+                    )
             elif epay_status == "REFUND":
                 record.status = PaymentStatus.REFUND
             elif epay_status == "CANCEL":
@@ -598,7 +622,15 @@ class PaymentService:
             record.status = PaymentStatus.CANCEL
 
         if record.status in (PaymentStatus.AUTH, PaymentStatus.CHARGE):
-            await self._apply_success_effect(record, previous_status=previous_status)
+            try:
+                await self._apply_success_effect(record, previous_status=previous_status)
+            except Exception as exc:
+                logger.exception(
+                    "Status sync success side-effect failed payment=%s invoice=%s error=%s",
+                    record.id,
+                    record.invoice_id,
+                    str(exc),
+                )
 
         await self.repo.update_payment(record)
         return record

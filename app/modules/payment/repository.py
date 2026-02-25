@@ -85,7 +85,7 @@ class PaymentRepository:
 
         record.updated_at = datetime.utcnow()
         ref = self._payments_ref(record.user_id).document(record.id)
-        await anyio.to_thread.run_sync(ref.set, record.dict(), {"merge": True})
+        await anyio.to_thread.run_sync(lambda: ref.set(record.dict(), merge=True))
         logger.info("Payment record updated: %s status=%s", record.id, record.status)
         return record
 
