@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     EPAY_ESIM_AUTOPAY_COOLDOWN_MINUTES: int = 60
     EPAY_HTTP_TIMEOUT_SECONDS: float = 40.0
     EPAY_HTTP_RETRIES: int = 3
+    EPAY_REQUEST_DEADLINE_SECONDS: float = 25.0
 
     model_config = SettingsConfigDict(
         env_file=".env", 

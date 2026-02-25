@@ -263,14 +263,20 @@ class EpayClient:
                         resp.raise_for_status()
                         return resp.json()
                     except httpx.HTTPStatusError as exc:
+                        status_code = exc.response.status_code
                         logger.error(
                             "ePay HTTP error: %s %s — %s",
-                            exc.response.status_code,
+                            status_code,
                             url,
                             exc.response.text[:500],
                         )
-                        # HTTP status error is final for this URL (no point retrying with same payload many times)
-                        raise AppError(502, f"ePay error: {exc.response.status_code}")
+                        if 400 <= status_code < 500 and status_code not in (408, 429):
+                            raise AppError(502, f"ePay error: {status_code}")
+                        if attempt < self.retries:
+                            await self._sleep_backoff(attempt)
+                            continue
+                        # try next fallback URL
+                        break
                     except httpx.HTTPError as exc:
                         last_error = exc
                         logger.warning("ePay network error: %s — %s", url, exc)
@@ -296,13 +302,19 @@ class EpayClient:
                         except Exception:
                             return {"raw": resp.text}
                     except httpx.HTTPStatusError as exc:
+                        status_code = exc.response.status_code
                         logger.error(
                             "ePay HTTP error: %s %s — %s",
-                            exc.response.status_code,
+                            status_code,
                             url,
                             exc.response.text[:500],
                         )
-                        raise AppError(502, f"ePay error: {exc.response.status_code}")
+                        if 400 <= status_code < 500 and status_code not in (408, 429):
+                            raise AppError(502, f"ePay error: {status_code}")
+                        if attempt < self.retries:
+                            await self._sleep_backoff(attempt)
+                            continue
+                        break
                     except httpx.HTTPError as exc:
                         logger.warning("ePay network error: %s — %s", url, exc)
                         if attempt < self.retries:
@@ -322,13 +334,19 @@ class EpayClient:
                         resp.raise_for_status()
                         return resp.json()
                     except httpx.HTTPStatusError as exc:
+                        status_code = exc.response.status_code
                         logger.error(
                             "ePay HTTP error: %s %s — %s",
-                            exc.response.status_code,
+                            status_code,
                             url,
                             exc.response.text[:500],
                         )
-                        raise AppError(502, f"ePay error: {exc.response.status_code}")
+                        if 400 <= status_code < 500 and status_code not in (408, 429):
+                            raise AppError(502, f"ePay error: {status_code}")
+                        if attempt < self.retries:
+                            await self._sleep_backoff(attempt)
+                            continue
+                        break
                     except httpx.HTTPError as exc:
                         logger.warning("ePay network error: %s — %s", url, exc)
                         if attempt < self.retries:

@@ -1,5 +1,6 @@
 import uuid
 import secrets
+import asyncio
 from datetime import datetime
 from typing import List, Optional
 import json
@@ -323,7 +324,10 @@ class PaymentService:
 
         # Verify with ePay regardless of callback code
         try:
-            status_resp = await self.epay.check_transaction_status(payload.invoiceId)
+            status_resp = await self._call_epay_with_deadline(
+                self.epay.check_transaction_status(payload.invoiceId),
+                operation=f"check-status invoice={payload.invoiceId}",
+            )
         except AppError as exc:
             logger.warning(
                 "Webhook verify skipped (temporary ePay failure) invoice=%s error=%s",
@@ -404,7 +408,10 @@ class PaymentService:
     # ------------------------------------------------------------------
 
     async def get_saved_cards(self, user_id: str) -> List[SavedCardOut]:
-        epay_cards = await self.epay.get_saved_cards(user_id)
+        epay_cards = await self._call_epay_with_deadline(
+            self.epay.get_saved_cards(user_id),
+            operation=f"saved-cards account={user_id}",
+        )
         return [
             SavedCardOut(
                 id=c.ID,
@@ -417,7 +424,10 @@ class PaymentService:
         ]
 
     async def deactivate_card(self, user_id: str, card_id: str) -> dict:
-        return await self.epay.deactivate_card(card_id)
+        return await self._call_epay_with_deadline(
+            self.epay.deactivate_card(card_id),
+            operation=f"deactivate-card id={card_id}",
+        )
 
     # ------------------------------------------------------------------
     # 6. Admin: charge, refund, status
@@ -480,7 +490,10 @@ class PaymentService:
 
     async def verify_payment_from_epay(self, invoice_id: str) -> dict:
         """Directly query ePay for a transaction status."""
-        resp = await self.epay.check_transaction_status(invoice_id)
+        resp = await self._call_epay_with_deadline(
+            self.epay.check_transaction_status(invoice_id),
+            operation=f"admin-verify invoice={invoice_id}",
+        )
         return resp.dict()
 
     async def handle_webhook_raw(self, payload: dict) -> None:
@@ -584,7 +597,10 @@ class PaymentService:
 
     async def _sync_payment_status_from_epay(self, record: PaymentRecord) -> PaymentRecord:
         try:
-            status_resp = await self.epay.check_transaction_status(record.invoice_id)
+            status_resp = await self._call_epay_with_deadline(
+                self.epay.check_transaction_status(record.invoice_id),
+                operation=f"sync-status invoice={record.invoice_id}",
+            )
         except AppError as exc:
             logger.warning(
                 "Status sync skipped (temporary ePay failure) payment=%s invoice=%s error=%s",
@@ -648,3 +664,17 @@ class PaymentService:
     @staticmethod
     def _url_join(base: str, path: str) -> str:
         return f"{base.rstrip('/')}/{path.lstrip('/')}"
+
+    async def _call_epay_with_deadline(self, coro, operation: str):
+        try:
+            return await asyncio.wait_for(
+                coro,
+                timeout=float(settings.EPAY_REQUEST_DEADLINE_SECONDS),
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "ePay request deadline exceeded operation=%s timeout=%s",
+                operation,
+                settings.EPAY_REQUEST_DEADLINE_SECONDS,
+            )
+            raise AppError(502, "ePay request timed out")
