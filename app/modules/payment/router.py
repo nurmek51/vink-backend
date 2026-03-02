@@ -99,6 +99,31 @@ async def deactivate_card(
     return DataResponse(message="Card deactivated")
 
 
+@router.post(
+    "/payments/{payment_id}/cancel",
+    response_model=DataResponse[PaymentStatusOut],
+    summary="Cancel a pending payment and release reserved eSIM",
+)
+async def cancel_payment(
+    payment_id: str,
+    current_user: User = Depends(require_app_permission("vink")),
+    service: PaymentService = Depends(_get_service),
+):
+    record = await service.cancel_payment(current_user.id, payment_id)
+    return DataResponse(
+        data=PaymentStatusOut(
+            payment_id=record.id,
+            invoice_id=record.invoice_id,
+            status=record.status,
+            amount=record.amount,
+            currency=record.currency,
+            card_mask=record.card_mask,
+            created_at=record.created_at,
+        ),
+        message="Payment canceled and resources released",
+    )
+
+
 @router.get(
     "/payments",
     response_model=DataResponse[List[PaymentStatusOut]],

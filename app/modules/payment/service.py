@@ -475,6 +475,27 @@ class PaymentService:
             operation=f"deactivate-card id={card_id}",
         )
 
+    async def cancel_payment(self, user_id: str, payment_id: str) -> PaymentRecord:
+        record = await self.repo.get_payment(user_id, payment_id)
+        if not record:
+            raise NotFoundError("Payment not found")
+
+        if record.status not in (PaymentStatus.PENDING,):
+            # If it's already failed/canceled, just return it
+            if record.status in (PaymentStatus.FAILED, PaymentStatus.CANCEL):
+                return record
+            raise BadRequestError(f"Cannot cancel payment in status: {record.status}")
+
+        record.status = PaymentStatus.CANCEL
+        record.reason = "user_canceled"
+        await self.repo.update_payment(record)
+
+        # Release eSIM if it was a purchase
+        if record.payment_type == PaymentType.PURCHASE:
+            await self.esim_service.release_reserved_esim(payment_id)
+
+        return record
+
     # ------------------------------------------------------------------
     # 6. Admin: charge, refund, status
     # ------------------------------------------------------------------
