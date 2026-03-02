@@ -19,6 +19,7 @@ class PaymentStatus(str, Enum):
 
 class PaymentType(str, Enum):
     ONE_TIME = "one_time"
+    PURCHASE = "purchase"
     CARD_SAVE = "card_save"
     RECURRENT = "recurrent"
 
@@ -52,6 +53,7 @@ class PaymentRecord(BaseModel):
     save_card_requested: bool = False
     target_esim_id: Optional[str] = None
     target_imsi: Optional[str] = None
+    reserved_esim_imsi: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: Optional[datetime] = None
 
@@ -61,10 +63,9 @@ class PaymentRecord(BaseModel):
 # ---------------------------------------------------------------------------
 
 class InitiatePaymentRequest(BaseModel):
-    """Client requests a payment session (one-time top-up)."""
+    """Client requests a payment session (top-up or purchase)."""
     amount: Optional[float] = Field(None, gt=0, description="Amount in KZT")
-    esim_id: str = Field(..., description="Target eSIM id to top up")
-    description: str = Field("Top-up", max_length=125)
+    esim_id: Optional[str] = Field(None, description="Target eSIM id for top-up mode")
     save_card: bool = Field(False, description="If true, initiates card verification/saving flow")
     language: str = Field("rus", pattern="^(rus|kaz|eng)$")
 

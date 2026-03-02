@@ -111,6 +111,7 @@ API_INTEGRATION.md
 .github/instructions/ePay.instructions.md
 EPAY_FRONTEND_GUIDE.md
 EPAY_CHANGELOG.md
+PAYMENT_PROCESS_GUIDE.md
 
 # mypy
 .mypy_cache/

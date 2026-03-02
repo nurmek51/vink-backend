@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     EPAY_HTTP_TIMEOUT_SECONDS: float = 40.0
     EPAY_HTTP_RETRIES: int = 3
     EPAY_REQUEST_DEADLINE_SECONDS: float = 25.0
+    EPAY_PENDING_TTL_MINUTES: int = 10
 
     model_config = SettingsConfigDict(
         env_file=".env", 

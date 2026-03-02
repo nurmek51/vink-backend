@@ -33,7 +33,7 @@ def _get_service() -> PaymentService:
 @router.post(
     "/payments/initiate",
     response_model=DataResponse[InitiatePaymentResponse],
-    summary="Create a one-time payment session",
+    summary="Create payment session (top-up or purchase eSIM)",
 )
 async def initiate_payment(
     req: InitiatePaymentRequest,

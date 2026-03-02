@@ -1,6 +1,7 @@
 import uuid
 import secrets
 import asyncio
+from datetime import timezone
 from datetime import datetime
 from typing import List, Optional
 import json
@@ -22,6 +23,7 @@ from app.modules.payment.schemas import (
     PaymentStatusOut,
 )
 from app.modules.users.repository import UserRepository
+from app.modules.esim.service import EsimService
 from app.modules.wallet.service import WalletService
 from app.providers.epay.client import EpayClient
 from app.providers.esim_provider.client import EsimProviderClient
@@ -38,6 +40,7 @@ class PaymentService:
         self.repo = PaymentRepository()
         self.esim_repo = PaymentEsimRepository()
         self.user_repo = UserRepository()
+        self.esim_service = EsimService()
         self.wallet_service = WalletService()
         self.epay = EpayClient()
         self.esim_provider = EsimProviderClient()
@@ -49,12 +52,17 @@ class PaymentService:
     async def initiate_payment(
         self, user_id: str, req: InitiatePaymentRequest
     ) -> InitiatePaymentResponse:
-        target_esim = await self.esim_repo.get_user_esim(user_id, req.esim_id)
-        if not target_esim:
-            raise NotFoundError("Target eSIM not found")
+        payment_id = str(uuid.uuid4())
+        target_esim = None
+        reserved_esim = None
+        if req.esim_id:
+            target_esim = await self.esim_repo.get_user_esim(user_id, req.esim_id)
+            if not target_esim:
+                raise NotFoundError("Target eSIM not found")
+        else:
+            reserved_esim = await self.esim_service.reserve_esim_for_payment(payment_id, user_id)
 
         invoice_id = self._generate_invoice_id()
-        payment_id = str(uuid.uuid4())
         secret_hash = secrets.token_urlsafe(24)
         checkout_token = secrets.token_urlsafe(32)
         back_link = settings.EPAY_DEFAULT_BACK_LINK
@@ -62,17 +70,22 @@ class PaymentService:
         is_card_save = req.save_card
         payment_amount = float(req.amount or 0)
         payment_currency = "KZT"
-        payment_description = req.description
-        payment_type = PaymentType.ONE_TIME
+        payment_type = PaymentType.ONE_TIME if req.esim_id else PaymentType.PURCHASE
+        payment_description = "Top-up eSIM" if req.esim_id else "Purchase eSIM"
 
-        token_resp = await self.epay.obtain_payment_token(
-            invoice_id=invoice_id,
-            amount=payment_amount,
-            currency=payment_currency,
-            post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-            failure_post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
-            secret_hash=secret_hash,
-        )
+        try:
+            token_resp = await self.epay.obtain_payment_token(
+                invoice_id=invoice_id,
+                amount=payment_amount,
+                currency=payment_currency,
+                post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
+                failure_post_link=self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook"),
+                secret_hash=secret_hash,
+            )
+        except Exception:
+            if payment_type == PaymentType.PURCHASE:
+                await self.esim_service.release_reserved_esim(payment_id)
+            raise
 
         post_link = self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook")
         failure_post_link = self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook")
@@ -92,12 +105,18 @@ class PaymentService:
             failure_back_link=failure_back_link,
             language=req.language,
             save_card_requested=is_card_save,
-            target_esim_id=req.esim_id,
-            target_imsi=target_esim.get("imsi"),
+            target_esim_id=req.esim_id if req.esim_id else None,
+            target_imsi=target_esim.get("imsi") if target_esim else None,
+            reserved_esim_imsi=reserved_esim.get("imsi") if reserved_esim else None,
         )
-        await self.repo.create_payment(record)
-        await self.repo.create_invoice_mapping(invoice_id, user_id, payment_id)
-        await self.repo.create_checkout_mapping(payment_id, user_id, checkout_token)
+        try:
+            await self.repo.create_payment(record)
+            await self.repo.create_invoice_mapping(invoice_id, user_id, payment_id)
+            await self.repo.create_checkout_mapping(payment_id, user_id, checkout_token)
+        except Exception:
+            if payment_type == PaymentType.PURCHASE:
+                await self.esim_service.release_reserved_esim(payment_id)
+            raise
 
         checkout_url = self._url_join(
             settings.EPAY_CHECKOUT_BASE_URL,
@@ -399,14 +418,22 @@ class PaymentService:
                     )
             elif epay_status == "REFUND":
                 record.status = PaymentStatus.REFUND
+                if record.payment_type == PaymentType.PURCHASE:
+                    await self.esim_service.release_reserved_esim(record.id)
             elif epay_status == "CANCEL":
                 record.status = PaymentStatus.CANCEL
+                if record.payment_type == PaymentType.PURCHASE:
+                    await self.esim_service.release_reserved_esim(record.id)
             else:
                 record.status = PaymentStatus.FAILED
+                if record.payment_type == PaymentType.PURCHASE:
+                    await self.esim_service.release_reserved_esim(record.id)
         else:
             record.status = PaymentStatus.FAILED
             record.reason = payload.reason
             record.reason_code = payload.reasonCode
+            if record.payment_type == PaymentType.PURCHASE:
+                await self.esim_service.release_reserved_esim(record.id)
 
         await self.repo.update_payment(record)
         logger.info("Webhook processed: payment=%s → %s", record.id, record.status)
@@ -476,6 +503,8 @@ class PaymentService:
         if not record:
             raise NotFoundError("Payment not found")
 
+        record = await self._expire_stale_pending_payment(record)
+
         if sync_with_epay and record.status == PaymentStatus.PENDING:
             record = await self._sync_payment_status_from_epay(record)
 
@@ -491,6 +520,9 @@ class PaymentService:
 
     async def list_payments(self, user_id: str) -> List[PaymentStatusOut]:
         records = await self.repo.list_payments(user_id)
+        normalized_records: List[PaymentRecord] = []
+        for record in records:
+            normalized_records.append(await self._expire_stale_pending_payment(record))
         return [
             PaymentStatusOut(
                 payment_id=r.id,
@@ -501,7 +533,7 @@ class PaymentService:
                 card_mask=r.card_mask,
                 created_at=r.created_at,
             )
-            for r in records
+            for r in normalized_records
         ]
 
     async def verify_payment_from_epay(self, invoice_id: str) -> dict:
@@ -595,8 +627,18 @@ class PaymentService:
         if (
             previous_status in (PaymentStatus.AUTH, PaymentStatus.CHARGE)
             or record.amount <= 0
-            or record.payment_type not in (PaymentType.ONE_TIME, PaymentType.RECURRENT)
+            or record.payment_type not in (PaymentType.ONE_TIME, PaymentType.RECURRENT, PaymentType.PURCHASE)
         ):
+            return
+
+        if record.payment_type == PaymentType.PURCHASE:
+            await self._purchase_esim_for_user(record)
+            await self.wallet_service.log_transaction(
+                user_id=record.user_id,
+                type="esim_purchase",
+                amount=record.amount,
+                description=f"ePay purchase {record.invoice_id}",
+            )
             return
 
         if record.target_esim_id:
@@ -610,6 +652,12 @@ class PaymentService:
             amount=record.amount,
             description=f"ePay payment {record.invoice_id}",
         )
+
+    async def _purchase_esim_for_user(self, record: PaymentRecord) -> None:
+        user = await self.user_repo.get_user(record.user_id)
+        if not user:
+            raise NotFoundError("User not found")
+        await self.esim_service.purchase_reserved_esim(user, record.id)
 
     async def _sync_payment_status_from_epay(self, record: PaymentRecord) -> PaymentRecord:
         try:
@@ -658,8 +706,12 @@ class PaymentService:
             record.status = PaymentStatus.CHARGE
         elif epay_status == "REFUND":
             record.status = PaymentStatus.REFUND
+            if record.payment_type == PaymentType.PURCHASE:
+                await self.esim_service.release_reserved_esim(record.id)
         elif epay_status == "CANCEL":
             record.status = PaymentStatus.CANCEL
+            if record.payment_type == PaymentType.PURCHASE:
+                await self.esim_service.release_reserved_esim(record.id)
 
         if record.status in (PaymentStatus.AUTH, PaymentStatus.CHARGE):
             try:
@@ -672,6 +724,35 @@ class PaymentService:
                     str(exc),
                 )
 
+        await self.repo.update_payment(record)
+        return record
+
+    async def _expire_stale_pending_payment(self, record: PaymentRecord) -> PaymentRecord:
+        if record.status != PaymentStatus.PENDING:
+            return record
+
+        created_at = record.created_at
+        if not created_at:
+            return record
+
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        elapsed_seconds = (now - created_at).total_seconds()
+        ttl_seconds = max(1, int(settings.EPAY_PENDING_TTL_MINUTES)) * 60
+
+        if elapsed_seconds < ttl_seconds:
+            return record
+
+        record = await self._sync_payment_status_from_epay(record)
+        if record.status != PaymentStatus.PENDING:
+            return record
+
+        record.status = PaymentStatus.FAILED
+        record.reason = "expired_pending_timeout"
+        record.reason_code = -31
+        if record.payment_type == PaymentType.PURCHASE:
+            await self.esim_service.release_reserved_esim(record.id)
         await self.repo.update_payment(record)
         return record
 

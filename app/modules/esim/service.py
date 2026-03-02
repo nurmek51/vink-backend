@@ -181,6 +181,100 @@ class EsimService:
                 # Return cached outdated or empty if fails
                 return self._rates_cache
 
+    async def reserve_esim_for_payment(self, payment_id: str, user_id: str) -> dict:
+        all_imsis_provider = await self.provider.list_imsis()
+        allocated_imsis = set(await self.repository.get_all_allocated_imsis())
+        reserved_imsis = set(await self.repository.get_reserved_imsis())
+
+        for item in all_imsis_provider:
+            if item.imsi in allocated_imsis or item.imsi in reserved_imsis:
+                continue
+
+            payload = {
+                "payment_id": payment_id,
+                "user_id": user_id,
+                "reserved_at": datetime.datetime.utcnow().isoformat(),
+            }
+            created = await self.repository.create_reservation(item.imsi, payload)
+            if not created:
+                continue
+
+            return {
+                "imsi": item.imsi,
+                "msisdn": item.msisdn,
+                "balance": float(getattr(item, "balance", 0.0) or 0.0),
+            }
+
+        raise AppError(409, "No available eSIMs in stock")
+
+    async def release_reserved_esim(self, payment_id: str) -> None:
+        reservation = await self.repository.get_reservation_by_payment_id(payment_id)
+        if not reservation:
+            return
+        imsi = reservation.get("imsi")
+        if imsi:
+            await self.repository.delete_reservation(imsi)
+
+    async def purchase_reserved_esim(self, user: User, payment_id: str) -> Esim:
+        reservation = await self.repository.get_reservation_by_payment_id(payment_id)
+        if not reservation:
+            raise AppError(409, "Reserved eSIM not found")
+
+        imsi = reservation.get("imsi")
+        if not imsi:
+            raise AppError(409, "Reserved eSIM invalid")
+
+        all_imsis_provider = await self.provider.list_imsis()
+        target_imsi_item = next((item for item in all_imsis_provider if item.imsi == imsi), None)
+        if not target_imsi_item:
+            await self.repository.delete_reservation(imsi)
+            raise AppError(409, "Reserved eSIM is no longer available")
+
+        esim = await self._allocate_specific_imsi_to_user(user, target_imsi_item)
+        await self.repository.delete_reservation(imsi)
+        return esim
+
+    async def _allocate_specific_imsi_to_user(self, user: User, target_imsi_item) -> Esim:
+        iccid = None
+        try:
+            imsi_info = await self.provider.get_imsi_info(target_imsi_item.imsi)
+            iccid = imsi_info.ICCID
+        except Exception:
+            pass
+
+        existing_record = await self.repository.get_esim_by_imsi(target_imsi_item.imsi)
+
+        if existing_record:
+            esim_id = existing_record["id"]
+            existing_record["user_id"] = user.id
+            existing_record["status"] = "allocated"
+            if iccid:
+                existing_record["iccid"] = iccid
+            existing_record["provider"] = "Vink"
+            existing_record["updated_at"] = datetime.datetime.utcnow().isoformat()
+            await self.repository.save_esim(existing_record)
+        else:
+            esim_id = str(uuid.uuid4())
+            data_limit = getattr(target_imsi_item, "balance", 0.0)
+            activation_code = "UNKNOWN"
+
+            esim_record = {
+                "id": esim_id,
+                "user_id": user.id,
+                "imsi": target_imsi_item.imsi,
+                "iccid": iccid,
+                "msisdn": target_imsi_item.msisdn,
+                "status": "allocated",
+                "data_limit": data_limit,
+                "name": f"Vink eSIM {target_imsi_item.imsi[-4:]}",
+                "provider": "Vink",
+                "activation_code": activation_code,
+                "created_at": datetime.datetime.utcnow().isoformat(),
+            }
+            await self.repository.save_esim(esim_record)
+
+        return await self.get_esim_by_id(user, esim_id)
+
     async def get_tariffs(self) -> List[Tariff]:
         return await self._fetch_rates()
 
@@ -455,45 +549,8 @@ class EsimService:
         except Exception:
              pass
         
-        # 4. Allocate (Database Record)
-        # Check if we already have a record for this IMSI (e.g. it was unassigned before)
-        existing_record = await self.repository.get_esim_by_imsi(target_imsi_item.imsi)
-        
-        if existing_record:
-            # Update existing record
-            esim_id = existing_record["id"]
-            existing_record["user_id"] = user.id
-            existing_record["status"] = "allocated"
-            if iccid:
-                existing_record["iccid"] = iccid
-            existing_record["provider"] = "Vink"
-            existing_record["updated_at"] = datetime.datetime.utcnow().isoformat()
-            await self.repository.save_esim(existing_record)
-        else:
-            # Create new record
-            esim_id = str(uuid.uuid4())
-            data_limit = getattr(target_imsi_item, "balance", 0.0)
-            
-            # Using placeholders for Activation as before
-            activation_code = "UNKNOWN"
-            
-            esim_record = {
-                "id": esim_id,
-                "user_id": user.id,
-                "imsi": target_imsi_item.imsi,
-                "iccid": iccid,
-                "msisdn": target_imsi_item.msisdn, 
-                "status": "allocated",
-                "data_limit": data_limit,
-                "name": f"Vink eSIM {target_imsi_item.imsi[-4:]}",
-                "provider": "Vink",
-                "activation_code": activation_code,
-                "created_at": datetime.datetime.utcnow().isoformat()
-            }
-            await self.repository.save_esim(esim_record)
-        
-        # 5. Return fully populated eSIM info (consistent with detailed view)
-        return await self.get_esim_by_id(user, esim_id)
+        # 4. Allocate and return fully populated eSIM info
+        return await self._allocate_specific_imsi_to_user(user, target_imsi_item)
 
     async def get_unassigned_esims(self) -> List[Esim]:
         # 1. Fetch all IMSI from Provider
