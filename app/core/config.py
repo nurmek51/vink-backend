@@ -48,8 +48,8 @@ class Settings(BaseSettings):
     EPAY_TERMINAL_ID: str = "67e34d63-102f-4bd1-898e-370781d0074d"
     EPAY_POSTLINK_BASE_URL: str = "https://nurmek.site"  # Public URL of this server
     EPAY_CHECKOUT_BASE_URL: str = "https://nurmek.site"  # URL clients open for hosted checkout page
-    EPAY_DEFAULT_BACK_LINK: str = "https://nurmek.site/payment/success"
-    EPAY_DEFAULT_FAILURE_BACK_LINK: str = "https://nurmek.site/payment/failure"
+    EPAY_DEFAULT_BACK_LINK: str = "vinksim://payment-return?result=success"
+    EPAY_DEFAULT_FAILURE_BACK_LINK: str = "vinksim://payment-return?result=failure"
     EPAY_ESIM_AUTOPAY_ENABLED: bool = True
     EPAY_ESIM_AUTOPAY_THRESHOLD_MB: float = 51.0
     EPAY_ESIM_AUTOPAY_PACKAGE_MB: float = 3072.0
@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     EPAY_HTTP_TIMEOUT_SECONDS: float = 40.0
     EPAY_HTTP_RETRIES: int = 3
     EPAY_REQUEST_DEADLINE_SECONDS: float = 25.0
-    EPAY_PENDING_TTL_MINUTES: int = 10
+    EPAY_PENDING_TTL_MINUTES: int = 20
 
     model_config = SettingsConfigDict(
         env_file=".env", 

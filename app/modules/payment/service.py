@@ -65,8 +65,11 @@ class PaymentService:
         invoice_id = self._generate_invoice_id()
         secret_hash = secrets.token_urlsafe(24)
         checkout_token = secrets.token_urlsafe(32)
-        back_link = settings.EPAY_DEFAULT_BACK_LINK
-        failure_back_link = settings.EPAY_DEFAULT_FAILURE_BACK_LINK
+        
+        # Format deep links with payment_id
+        back_link = f"{settings.EPAY_DEFAULT_BACK_LINK}&payment_id={payment_id}"
+        failure_back_link = f"{settings.EPAY_DEFAULT_FAILURE_BACK_LINK}&payment_id={payment_id}"
+        
         is_card_save = req.save_card
         payment_amount = float(req.amount or 0)
         payment_currency = "KZT"
