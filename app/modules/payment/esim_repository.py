@@ -29,6 +29,16 @@ class PaymentEsimRepository:
             return None
         return data
 
+    async def get_user_esim_by_imsi(self, user_id: str, imsi: str) -> Optional[dict]:
+        query = self.collection.where("imsi", "==", imsi).limit(1)
+        docs = await anyio.to_thread.run_sync(query.get)
+        for doc in docs:
+            data = doc.to_dict()
+            if data.get("user_id") != user_id:
+                return None
+            return data
+        return None
+
     async def update_esim(self, esim_data: dict) -> None:
         doc_ref = self.collection.document(esim_data["id"])
         await anyio.to_thread.run_sync(doc_ref.set, esim_data)

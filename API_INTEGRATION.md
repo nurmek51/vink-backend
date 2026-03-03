@@ -62,9 +62,18 @@ Endpoint: POST /payments/initiate
 Request (one-time top-up):
 ```json
 {
+  "imsi": "<user_imsi>",
+  "amount": 5,
+  "save_card": false,
+  "language": "rus"
+}
+```
+
+Request (one-time top-up, legacy compatibility):
+```json
+{
   "esim_id": "<user_esim_id>",
   "amount": 5,
-  "description": "Top-up",
   "save_card": false,
   "language": "rus"
 }
@@ -73,7 +82,7 @@ Request (one-time top-up):
 Request (save card):
 ```json
 {
-  "esim_id": "<user_esim_id>",
+  "imsi": "<user_imsi>",
   "amount": 5,
   "save_card": true,
   "language": "rus"
@@ -83,6 +92,8 @@ Request (save card):
 `save_card=true` means paid top-up + card saving in the same acquiring transaction.
 
 Notes:
+- `imsi` is the primary top-up identifier for `/payments/initiate`.
+- `esim_id` is accepted as a legacy fallback.
 - back_link and failure_back_link are no longer passed by client.
 - Redirect links are taken from backend env:
   - EPAY_DEFAULT_BACK_LINK

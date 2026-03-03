@@ -65,6 +65,7 @@ class PaymentRecord(BaseModel):
 class InitiatePaymentRequest(BaseModel):
     """Client requests a payment session (top-up or purchase)."""
     amount: Optional[float] = Field(None, gt=0, description="Amount in KZT")
+    imsi: Optional[str] = Field(None, description="Target eSIM IMSI for top-up mode")
     esim_id: Optional[str] = Field(None, description="Target eSIM id for top-up mode")
     save_card: bool = Field(False, description="If true, initiates card verification/saving flow")
     language: str = Field("rus", pattern="^(rus|kaz|eng)$")
@@ -73,6 +74,8 @@ class InitiatePaymentRequest(BaseModel):
     def validate_amount_for_non_card_save(self):
         if self.amount is None:
             raise ValueError("amount is required")
+        if self.imsi and self.esim_id:
+            raise ValueError("Provide either imsi or esim_id, not both")
         return self
 
 

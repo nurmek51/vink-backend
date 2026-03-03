@@ -55,7 +55,11 @@ class PaymentService:
         payment_id = str(uuid.uuid4())
         target_esim = None
         reserved_esim = None
-        if req.esim_id:
+        if req.imsi:
+            target_esim = await self.esim_repo.get_user_esim_by_imsi(user_id, req.imsi)
+            if not target_esim:
+                raise NotFoundError("Target eSIM not found")
+        elif req.esim_id:
             target_esim = await self.esim_repo.get_user_esim(user_id, req.esim_id)
             if not target_esim:
                 raise NotFoundError("Target eSIM not found")
@@ -73,8 +77,8 @@ class PaymentService:
         is_card_save = req.save_card
         payment_amount = float(req.amount or 0)
         payment_currency = "KZT"
-        payment_type = PaymentType.ONE_TIME if req.esim_id else PaymentType.PURCHASE
-        payment_description = "Top-up eSIM" if req.esim_id else "Purchase eSIM"
+        payment_type = PaymentType.ONE_TIME if target_esim else PaymentType.PURCHASE
+        payment_description = "Top-up eSIM" if target_esim else "Purchase eSIM"
 
         try:
             token_resp = await self.epay.obtain_payment_token(
@@ -108,7 +112,7 @@ class PaymentService:
             failure_back_link=failure_back_link,
             language=req.language,
             save_card_requested=is_card_save,
-            target_esim_id=req.esim_id if req.esim_id else None,
+            target_esim_id=target_esim.get("id") if target_esim else None,
             target_imsi=target_esim.get("imsi") if target_esim else None,
             reserved_esim_imsi=reserved_esim.get("imsi") if reserved_esim else None,
         )
