@@ -230,7 +230,7 @@ class EpayClient:
     ) -> EpayCardIdPaymentResponse:
         """POST /payments/cards/auth — server-to-server card payment."""
         data = await self._post_json(
-            self._api_urls_with_path("/payments/cards/auth"),
+            self._card_payment_urls(),
             request.dict(),
             token,
         )
@@ -302,7 +302,7 @@ class EpayClient:
         self, urls: List[str], body: Optional[dict], token: str
     ) -> dict:
         headers = {"Authorization": f"Bearer {token}"}
-        for url in urls:
+        for url_index, url in enumerate(urls):
             for attempt in range(1, self.retries + 1):
                 logger.info("ePay POST (json) → %s (attempt %s/%s)", url, attempt, self.retries)
                 async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
@@ -321,6 +321,12 @@ class EpayClient:
                             url,
                             exc.response.text[:500],
                         )
+                        # Some ePay endpoints differ by host/base-path.
+                        # If current URL returns 404 and we have other candidates,
+                        # continue with next URL before failing the request.
+                        if status_code == 404 and url_index < (len(urls) - 1):
+                            logger.warning("ePay endpoint not found on this base, trying next URL: %s", url)
+                            break
                         if 400 <= status_code < 500 and status_code not in (408, 429):
                             raise AppError(502, f"ePay error: {status_code}")
                         if attempt < self.retries:
@@ -398,6 +404,34 @@ class EpayClient:
         if self.api_fallback_url:
             bases.append(self.api_fallback_url)
         return [f"{base.rstrip('/')}/{path.lstrip('/')}" for base in bases]
+
+    def _card_payment_urls(self) -> List[str]:
+        """Build candidate URLs for cardId recurrent payment endpoint.
+
+        Different ePay environments may expose `/payments/cards/auth`
+        either under base `.../api` or directly on host root.
+        """
+        path = "/payments/cards/auth"
+        bases: List[str] = [self.api_url]
+        if self.api_fallback_url:
+            bases.append(self.api_fallback_url)
+
+        candidates: List[str] = []
+        for base in bases:
+            normalized = base.rstrip("/")
+            candidates.append(f"{normalized}/{path.lstrip('/')}")
+
+            if normalized.endswith("/api"):
+                no_api_base = normalized[:-4]
+                if no_api_base:
+                    candidates.append(f"{no_api_base.rstrip('/')}/{path.lstrip('/')}")
+
+        # Keep order, remove duplicates
+        unique: List[str] = []
+        for url in candidates:
+            if url not in unique:
+                unique.append(url)
+        return unique
 
     @staticmethod
     async def _sleep_backoff(attempt: int) -> None:
