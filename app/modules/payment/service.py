@@ -248,6 +248,7 @@ class PaymentService:
         post_link = f"{settings.EPAY_POSTLINK_BASE_URL}/api/v1/payments/webhook"
         failure_post_link = post_link
         back_link = f"{settings.EPAY_POSTLINK_BASE_URL}/api/v1/payments/status/{payment_id}"
+        recurrent_timeout = self._get_recurrent_deadline_seconds()
 
         # Obtain payment token for the recurrent charge
         token_resp = await self._call_epay_with_deadline(
@@ -259,6 +260,7 @@ class PaymentService:
                 failure_post_link=failure_post_link,
             ),
             operation=f"recurrent-token invoice={invoice_id}",
+            timeout_seconds=recurrent_timeout,
         )
 
         epay_req = EpayCardIdPaymentRequest(
@@ -300,6 +302,7 @@ class PaymentService:
         epay_resp = await self._call_epay_with_deadline(
             self.epay.pay_with_saved_card(epay_req, token_resp.access_token),
             operation=f"recurrent-auth invoice={invoice_id}",
+            timeout_seconds=recurrent_timeout,
         )
 
         requires_3ds = epay_resp.status == "3D"
@@ -801,19 +804,36 @@ class PaymentService:
     def _url_join(base: str, path: str) -> str:
         return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
-    async def _call_epay_with_deadline(self, coro, operation: str):
+    async def _call_epay_with_deadline(self, coro, operation: str, timeout_seconds: Optional[float] = None):
+        effective_timeout = float(timeout_seconds or settings.EPAY_REQUEST_DEADLINE_SECONDS)
         try:
             return await asyncio.wait_for(
                 coro,
-                timeout=float(settings.EPAY_REQUEST_DEADLINE_SECONDS),
+                timeout=effective_timeout,
             )
         except asyncio.TimeoutError:
             logger.error(
                 "ePay request deadline exceeded operation=%s timeout=%s",
                 operation,
-                settings.EPAY_REQUEST_DEADLINE_SECONDS,
+                effective_timeout,
             )
             raise AppError(502, "ePay request timed out")
+
+    @staticmethod
+    def _get_recurrent_deadline_seconds() -> float:
+        """Adaptive deadline for recurrent flow.
+
+        Recurrent payment performs token + auth calls and ePay may be slow.
+        Ensure deadline is never lower than a realistic lower bound derived
+        from HTTP timeout/retry settings.
+        """
+        base_deadline = float(settings.EPAY_REQUEST_DEADLINE_SECONDS)
+        per_attempt_timeout = float(settings.EPAY_HTTP_TIMEOUT_SECONDS)
+        retries = max(1, int(settings.EPAY_HTTP_RETRIES))
+
+        # Worst case for one operation (timeout on every attempt) + backoff margin.
+        derived_min_deadline = (per_attempt_timeout * retries) + 5.0
+        return max(base_deadline, derived_min_deadline)
 
     async def _get_local_saved_cards_fallback(self, user_id: str) -> List[SavedCardOut]:
         records = await self.repo.list_payments(user_id, limit=200)
