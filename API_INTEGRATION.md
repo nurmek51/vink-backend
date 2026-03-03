@@ -135,6 +135,17 @@ Behavior notes:
 Request:
 ```json
 {
+  "imsi": "<user_imsi>",
+  "card_id": "<saved_card_id>",
+  "amount": 5,
+  "description": "Subscription",
+  "currency": "KZT"
+}
+```
+
+Legacy fallback is still supported:
+```json
+{
   "esim_id": "<user_esim_id>",
   "card_id": "<saved_card_id>",
   "amount": 5,

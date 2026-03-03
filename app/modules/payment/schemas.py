@@ -101,11 +101,20 @@ class InitiatePaymentResponse(BaseModel):
 
 class RecurrentPaymentRequest(BaseModel):
     """Server-side payment using a saved card."""
-    esim_id: str = Field(..., description="Target eSIM id to top up")
+    imsi: Optional[str] = Field(None, description="Target eSIM IMSI to top up")
+    esim_id: Optional[str] = Field(None, description="Target eSIM id to top up (legacy fallback)")
     card_id: str = Field(..., description="Stored ePay cardId UUID")
     amount: float = Field(..., gt=0)
     description: str = Field("Recurrent charge", max_length=125)
     currency: str = "KZT"
+
+    @model_validator(mode="after")
+    def validate_target_identifier(self):
+        if self.imsi and self.esim_id:
+            raise ValueError("Provide either imsi or esim_id, not both")
+        if not self.imsi and not self.esim_id:
+            raise ValueError("Either imsi or esim_id is required")
+        return self
 
 
 class RecurrentPaymentResponse(BaseModel):

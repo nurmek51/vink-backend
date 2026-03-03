@@ -231,7 +231,10 @@ class PaymentService:
     async def pay_with_saved_card(
         self, user_id: str, req: RecurrentPaymentRequest
     ) -> RecurrentPaymentResponse:
-        target_esim = await self.esim_repo.get_user_esim(user_id, req.esim_id)
+        if req.imsi:
+            target_esim = await self.esim_repo.get_user_esim_by_imsi(user_id, req.imsi)
+        else:
+            target_esim = await self.esim_repo.get_user_esim(user_id, req.esim_id)
         if not target_esim:
             raise NotFoundError("Target eSIM not found")
 
@@ -288,7 +291,7 @@ class PaymentService:
             status=PaymentStatus.PENDING,
             payment_type=PaymentType.RECURRENT,
             card_id=req.card_id,
-            target_esim_id=req.esim_id,
+            target_esim_id=target_esim.get("id"),
             target_imsi=target_esim.get("imsi"),
         )
         await self.repo.create_payment(record)
