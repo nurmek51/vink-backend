@@ -3,6 +3,8 @@ from app.providers.esim_provider.client import EsimProviderClient
 from app.providers.epay.client import EpayClient
 from app.providers.epay.schemas import EpayCardIdPaymentRequest
 from app.core.config import settings
+from app.modules.payment.repository import PaymentRepository
+from app.modules.payment.schemas import PaymentRecord, PaymentStatus, PaymentType
 from app.modules.users.repository import UserRepository
 from app.modules.esim.schemas import Esim, Tariff, UpdateSettingsRequest, UsageData
 from app.modules.users.schemas import User
@@ -14,11 +16,13 @@ import httpx
 import uuid
 import datetime
 import time
+import asyncio
 
 class EsimService:
     def __init__(self):
         self.repository = EsimRepository()
         self.user_repository = UserRepository()
+        self.payment_repository = PaymentRepository()
         self.provider = EsimProviderClient()
         self.epay = EpayClient()
         self._rates_cache: List[Tariff] = []
@@ -61,28 +65,65 @@ class EsimService:
         esim_data["autopay_last_attempt_ts"] = now_ts
         await self.repository.save_esim(esim_data)
 
+        payment_record: Optional[PaymentRecord] = None
         try:
-            saved_cards = await self.epay.get_saved_cards(user.id)
-            if not saved_cards:
+            selected_card = ""
+            try:
+                saved_cards = await self._call_epay_with_deadline(
+                    self.epay.get_saved_cards(user.id),
+                    operation=f"autopay-saved-cards user={user.id}",
+                )
+                if saved_cards:
+                    selected_card = self._pick_latest_card_id(saved_cards)
+            except AppError as exc:
+                logger.warning(
+                    "eSIM autopay saved-card lookup fell back to local cache user=%s error=%s",
+                    user.id,
+                    exc,
+                )
+
+            if not selected_card:
+                selected_card = await self._get_local_saved_card_id_fallback(user.id)
+
+            if not selected_card:
                 esim_data["autopay_last_status"] = "no_saved_card"
                 await self.repository.save_esim(esim_data)
                 return
 
-            selected_card = self._pick_latest_card_id(saved_cards)
-            if not selected_card:
-                esim_data["autopay_last_status"] = "no_valid_card"
-                await self.repository.save_esim(esim_data)
-                return
-
+            payment_id = str(uuid.uuid4())
             invoice_id = self._generate_autopay_invoice_id(esim_data.get("imsi", ""))
             post_link = self._url_join(settings.EPAY_POSTLINK_BASE_URL, "/api/v1/payments/webhook")
+            back_link = f"{settings.EPAY_DEFAULT_BACK_LINK}&payment_id={payment_id}"
+            failure_back_link = f"{settings.EPAY_DEFAULT_FAILURE_BACK_LINK}&payment_id={payment_id}"
+            language = (user.preferred_language or "rus").lower()
+            if language not in {"rus", "kaz", "eng"}:
+                language = "rus"
 
-            token_resp = await self.epay.obtain_payment_token(
+            payment_record = PaymentRecord(
+                id=payment_id,
+                user_id=user.id,
                 invoice_id=invoice_id,
                 amount=charge_kzt,
                 currency="KZT",
-                post_link=post_link,
-                failure_post_link=post_link,
+                description=f"AutoPay 3GB {country_name} @ {current_rate_usd_per_mb:.6f} USD/MB",
+                status=PaymentStatus.PENDING,
+                payment_type=PaymentType.RECURRENT,
+                card_id=selected_card,
+                target_esim_id=esim_data.get("id"),
+                target_imsi=esim_data.get("imsi"),
+            )
+            await self.payment_repository.create_payment(payment_record)
+            await self.payment_repository.create_invoice_mapping(invoice_id, user.id, payment_id)
+
+            token_resp = await self._call_epay_with_deadline(
+                self.epay.obtain_payment_token(
+                    invoice_id=invoice_id,
+                    amount=charge_kzt,
+                    currency="KZT",
+                    post_link=post_link,
+                    failure_post_link=post_link,
+                ),
+                operation=f"autopay-token invoice={invoice_id}",
             )
 
             pay_req = EpayCardIdPaymentRequest(
@@ -91,39 +132,70 @@ class EsimService:
                 name="VinkSIM AutoPay",
                 terminalId=self.epay.terminal_id,
                 invoiceId=invoice_id,
+                invoiceIdAlt=invoice_id,
                 description=f"AutoPay 3GB {country_name} @ {current_rate_usd_per_mb:.6f} USD/MB",
                 accountId=user.id,
                 email=user.email or "",
                 phone=user.phone_number or "",
-                backLink=settings.EPAY_DEFAULT_BACK_LINK,
-                failureBackLink=settings.EPAY_DEFAULT_FAILURE_BACK_LINK,
+                backLink=back_link,
+                failureBackLink=failure_back_link,
                 postLink=post_link,
                 failurePostLink=post_link,
-                language=(user.preferred_language or "rus"),
+                language=language,
                 paymentType="cardId",
                 recurrent=True,
                 cardId={"id": selected_card},
             )
 
-            payment_resp = await self.epay.pay_with_saved_card(pay_req, token_resp.access_token)
+            payment_resp = await self._call_epay_with_deadline(
+                self.epay.pay_with_saved_card(pay_req, token_resp.access_token),
+                operation=f"autopay-auth invoice={invoice_id}",
+            )
             if payment_resp.status not in ("AUTH", "CHARGE"):
+                payment_record.status = PaymentStatus.FAILED
+                payment_record.epay_transaction_id = payment_resp.id
+                payment_record.reason = f"epay_status_{(payment_resp.status or 'unknown').lower()}"
+                payment_record.reason_code = payment_resp.code
+                await self.payment_repository.update_payment(payment_record)
                 esim_data["autopay_last_status"] = f"payment_{(payment_resp.status or 'failed').lower()}"
                 await self.repository.save_esim(esim_data)
                 return
+
+            payment_record.status = (
+                PaymentStatus.AUTH if payment_resp.status == "AUTH" else PaymentStatus.CHARGE
+            )
+            payment_record.epay_transaction_id = payment_resp.id
+            payment_record.reference = payment_resp.reference
+            payment_record.card_id = payment_resp.cardID or selected_card
+            await self.payment_repository.update_payment(payment_record)
 
             await self.provider.top_up(esim_data["imsi"], package_mb)
 
             esim_data["data_limit"] = float(esim_data.get("data_limit", 0.0) or 0.0) + package_mb
             esim_data["autopay_last_status"] = "success"
             esim_data["autopay_last_success_ts"] = now_ts
-            esim_data["autopay_last_card_id"] = selected_card
+            esim_data["autopay_last_card_id"] = payment_resp.cardID or selected_card
             esim_data["autopay_last_rate_usd_per_mb"] = float(current_rate_usd_per_mb)
             esim_data["autopay_last_amount_usd"] = round(charge_usd, 4)
             esim_data["autopay_last_amount_kzt"] = charge_kzt
             esim_data["autopay_last_country"] = country_name
             await self.repository.save_esim(esim_data)
+        except AppError as exc:
+            logger.error("eSIM autopay ePay error for esim_id=%s: %s", esim_data.get("id"), exc)
+            if payment_record and payment_record.status == PaymentStatus.PENDING:
+                payment_record.status = PaymentStatus.FAILED
+                payment_record.reason = "epay_autopay_error"
+                payment_record.reason_code = 502
+                await self.payment_repository.update_payment(payment_record)
+            esim_data["autopay_last_status"] = "payment_error"
+            await self.repository.save_esim(esim_data)
         except Exception as exc:
             logger.error("eSIM autopay failed for esim_id=%s: %s", esim_data.get("id"), exc)
+            if payment_record and payment_record.status == PaymentStatus.PENDING:
+                payment_record.status = PaymentStatus.FAILED
+                payment_record.reason = "autopay_error"
+                payment_record.reason_code = -1
+                await self.payment_repository.update_payment(payment_record)
             esim_data["autopay_last_status"] = "error"
             await self.repository.save_esim(esim_data)
         finally:
@@ -149,6 +221,28 @@ class EsimService:
     @staticmethod
     def _url_join(base: str, path: str) -> str:
         return f"{base.rstrip('/')}/{path.lstrip('/')}"
+
+    async def _call_epay_with_deadline(self, coro, operation: str):
+        try:
+            return await asyncio.wait_for(
+                coro,
+                timeout=max(
+                    float(settings.EPAY_REQUEST_DEADLINE_SECONDS),
+                    (float(settings.EPAY_HTTP_TIMEOUT_SECONDS) * max(1, int(settings.EPAY_HTTP_RETRIES))) + 5.0,
+                ),
+            )
+        except asyncio.TimeoutError:
+            logger.error("ePay request deadline exceeded operation=%s", operation)
+            raise AppError(502, "ePay request timed out")
+
+    async def _get_local_saved_card_id_fallback(self, user_id: str) -> str:
+        records = await self.payment_repository.list_payments(user_id, limit=100)
+        for record in records:
+            if record.status not in (PaymentStatus.AUTH, PaymentStatus.CHARGE):
+                continue
+            if record.card_id:
+                return record.card_id
+        return ""
 
     async def _fetch_rates(self) -> List[Tariff]:
         # Update cache if older than 1 hour (3600 seconds)

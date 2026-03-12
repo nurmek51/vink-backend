@@ -91,7 +91,7 @@ class EpayClient:
         if secret_hash:
             form["secret_hash"] = secret_hash
 
-        data = await self._post_form(self._oauth_urls(), form, auth_header=None)
+        data = await self._post_form(self._payment_oauth_urls(), form, auth_header=None)
         resp = EpayTokenResponse(**data)
         logger.info(
             "ePay payment token obtained for invoice=%s amount=%s",
@@ -122,7 +122,7 @@ class EpayClient:
         if failure_post_link:
             form["failurePostLink"] = failure_post_link
 
-        data = await self._post_form(self._oauth_urls(), form, auth_header=None)
+        data = await self._post_form(self._payment_oauth_urls(), form, auth_header=None)
         resp = EpayTokenResponse(**data)
         logger.info("ePay card-save token obtained for invoice=%s", invoice_id)
         return resp
@@ -231,7 +231,7 @@ class EpayClient:
         """POST /payments/cards/auth — server-to-server card payment."""
         data = await self._post_json(
             self._card_payment_urls(),
-            request.dict(),
+            request.model_dump(exclude_none=True),
             token,
         )
         resp = EpayCardIdPaymentResponse(**data)
@@ -399,6 +399,35 @@ class EpayClient:
             urls.append(self.oauth_fallback_url)
         return urls
 
+    def _payment_oauth_urls(self) -> List[str]:
+        """Build candidate OAuth URLs for payment/card flows.
+
+        ePay test environments expose payment-scoped OAuth on
+        `test-epay-oauth.epayment.kz/oauth2/token`, while some other service
+        flows still use the legacy `testoauth.homebank.kz/epay2/oauth2/token`.
+        For payment and saved-card operations, prefer the payment-specific host.
+        """
+        candidates: List[str] = []
+
+        if self.oauth_fallback_url:
+            candidates.append(self.oauth_fallback_url)
+        candidates.append(self.oauth_url)
+
+        if any("test-epay-oauth.epayment.kz" in url for url in candidates):
+            ordered = [
+                url for url in candidates if "test-epay-oauth.epayment.kz" in url
+            ]
+            ordered.extend(
+                url for url in candidates if "test-epay-oauth.epayment.kz" not in url
+            )
+            candidates = ordered
+
+        unique: List[str] = []
+        for url in candidates:
+            if url and url not in unique:
+                unique.append(url)
+        return unique
+
     def _api_urls_with_path(self, path: str) -> List[str]:
         bases = [self.api_url]
         if self.api_fallback_url:
@@ -416,10 +445,27 @@ class EpayClient:
         if self.api_fallback_url:
             bases.append(self.api_fallback_url)
 
+        derived_bases: List[str] = []
+        for base in list(bases):
+            normalized = base.rstrip("/")
+            if "testepay.homebank.kz" in normalized:
+                derived_bases.extend(
+                    [
+                        "https://test-epay-api.epayment.kz/api",
+                        "https://test-epay-api.epayment.kz",
+                    ]
+                )
+            if normalized.endswith("/api"):
+                derived_bases.append(normalized[:-4])
+            elif not normalized.endswith("/payments/cards/auth"):
+                derived_bases.append(f"{normalized}/api")
+
+        bases.extend(derived_bases)
+
         candidates: List[str] = []
         for base in bases:
             normalized = base.rstrip("/")
-            candidates.append(f"{normalized}/{path.lstrip('/')}")
+            candidates.append(f"{normalized}/{path.lstrip('/')}" )
 
             if normalized.endswith("/api"):
                 no_api_base = normalized[:-4]

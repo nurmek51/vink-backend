@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     EPAY_OAUTH_URL: str = "https://testoauth.homebank.kz/epay2/oauth2/token"
     EPAY_API_URL: str = "https://testepay.homebank.kz/api"
     EPAY_OAUTH_FALLBACK_URL: Optional[str] = "https://test-epay-oauth.epayment.kz/oauth2/token"
-    EPAY_API_FALLBACK_URL: Optional[str] = None
+    EPAY_API_FALLBACK_URL: Optional[str] = "https://test-epay-api.epayment.kz/api"
     EPAY_PAYMENT_PAGE_JS: str = "https://test-epay.epayment.kz/payform/payment-api.js"
     EPAY_CLIENT_ID: str = "test"
     EPAY_CLIENT_SECRET: str = "yF587AV9Ms94qN2QShFzVR3vFnWkhjbAK3sG"

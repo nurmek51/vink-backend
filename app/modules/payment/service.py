@@ -245,23 +245,17 @@ class PaymentService:
         if not user:
             raise NotFoundError("User not found")
 
+        await self._ensure_saved_card_available(user_id, req.card_id)
+
         post_link = f"{settings.EPAY_POSTLINK_BASE_URL}/api/v1/payments/webhook"
         failure_post_link = post_link
-        back_link = f"{settings.EPAY_POSTLINK_BASE_URL}/api/v1/payments/status/{payment_id}"
+        back_link = f"{settings.EPAY_DEFAULT_BACK_LINK}&payment_id={payment_id}"
+        failure_back_link = f"{settings.EPAY_DEFAULT_FAILURE_BACK_LINK}&payment_id={payment_id}"
         recurrent_timeout = self._get_recurrent_deadline_seconds()
 
-        # Obtain payment token for the recurrent charge
-        token_resp = await self._call_epay_with_deadline(
-            self.epay.obtain_payment_token(
-                invoice_id=invoice_id,
-                amount=req.amount,
-                currency=req.currency,
-                post_link=post_link,
-                failure_post_link=failure_post_link,
-            ),
-            operation=f"recurrent-token invoice={invoice_id}",
-            timeout_seconds=recurrent_timeout,
-        )
+        language = (user.preferred_language or "rus").lower()
+        if language not in {"rus", "kaz", "eng"}:
+            language = "rus"
 
         epay_req = EpayCardIdPaymentRequest(
             amount=req.amount,
@@ -269,15 +263,16 @@ class PaymentService:
             name=f"{user.first_name or ''} {user.last_name or ''}".strip() or "Vink User",
             terminalId=self.epay.terminal_id,
             invoiceId=invoice_id,
+            invoiceIdAlt=invoice_id,
             description=req.description,
             accountId=user_id,
             email=user.email or "",
             phone=user.phone_number or "",
             backLink=back_link,
-            failureBackLink=back_link,
+            failureBackLink=failure_back_link,
             postLink=post_link,
             failurePostLink=failure_post_link,
-            language="rus",
+            language=language,
             paymentType="cardId",
             recurrent=True,
             cardId={"id": req.card_id},
@@ -299,11 +294,37 @@ class PaymentService:
         await self.repo.create_payment(record)
         await self.repo.create_invoice_mapping(invoice_id, user_id, payment_id)
 
-        epay_resp = await self._call_epay_with_deadline(
-            self.epay.pay_with_saved_card(epay_req, token_resp.access_token),
-            operation=f"recurrent-auth invoice={invoice_id}",
-            timeout_seconds=recurrent_timeout,
-        )
+        try:
+            token_resp = await self._call_epay_with_deadline(
+                self.epay.obtain_payment_token(
+                    invoice_id=invoice_id,
+                    amount=req.amount,
+                    currency=req.currency,
+                    post_link=post_link,
+                    failure_post_link=failure_post_link,
+                ),
+                operation=f"recurrent-token invoice={invoice_id}",
+                timeout_seconds=recurrent_timeout,
+            )
+
+            epay_resp = await self._call_epay_with_deadline(
+                self.epay.pay_with_saved_card(epay_req, token_resp.access_token),
+                operation=f"recurrent-auth invoice={invoice_id}",
+                timeout_seconds=recurrent_timeout,
+            )
+        except AppError as exc:
+            record.status = PaymentStatus.FAILED
+            detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc)}
+            record.reason = str(detail.get("message") or "epay_recurrent_error")
+            record.reason_code = int(detail.get("code") or -1)
+            await self.repo.update_payment(record)
+            raise
+        except Exception as exc:
+            record.status = PaymentStatus.FAILED
+            record.reason = "epay_recurrent_error"
+            record.reason_code = -1
+            await self.repo.update_payment(record)
+            raise exc
 
         requires_3ds = epay_resp.status == "3D"
         if epay_resp.status == "AUTH" or epay_resp.status == "CHARGE":
@@ -323,6 +344,12 @@ class PaymentService:
             await self.repo.update_payment(record)
         elif requires_3ds:
             record.epay_transaction_id = epay_resp.id
+            await self.repo.update_payment(record)
+        else:
+            record.status = PaymentStatus.FAILED
+            record.epay_transaction_id = epay_resp.id
+            record.reason = f"epay_status_{(epay_resp.status or 'unknown').lower()}"
+            record.reason_code = epay_resp.code
             await self.repo.update_payment(record)
 
         return RecurrentPaymentResponse(
@@ -859,3 +886,25 @@ class PaymentService:
             )
 
         return cards
+
+    async def _ensure_saved_card_available(self, user_id: str, card_id: str) -> None:
+        try:
+            epay_cards = await self._call_epay_with_deadline(
+                self.epay.get_saved_cards(user_id),
+                operation=f"validate-saved-card account={user_id}",
+            )
+            if any(card.ID == card_id for card in epay_cards):
+                return
+        except AppError as exc:
+            logger.warning(
+                "Saved-card validation fallback to local cache user=%s card_id=%s error=%s",
+                user_id,
+                card_id,
+                exc.detail.get("message") if isinstance(exc.detail, dict) else str(exc),
+            )
+
+        fallback_cards = await self._get_local_saved_cards_fallback(user_id)
+        if any(card.id == card_id for card in fallback_cards):
+            return
+
+        raise NotFoundError("Saved card not found")
