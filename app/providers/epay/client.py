@@ -442,36 +442,50 @@ class EpayClient:
         either under base `.../api` or directly on host root.
         """
         path = "/payments/cards/auth"
-        bases: List[str] = [self.api_url]
+        bases: List[str] = []
+
         if self.api_fallback_url:
             bases.append(self.api_fallback_url)
+        bases.append(self.api_url)
 
         derived_bases: List[str] = []
         for base in list(bases):
             normalized = base.rstrip("/")
-            if "testepay.homebank.kz" in normalized:
-                derived_bases.extend(
-                    [
-                        "https://test-epay-api.epayment.kz/api",
-                        "https://test-epay-api.epayment.kz",
-                    ]
-                )
+
             if normalized.endswith("/api"):
                 derived_bases.append(normalized[:-4])
-            elif not normalized.endswith("/payments/cards/auth"):
+            else:
                 derived_bases.append(f"{normalized}/api")
+
+            if "testepay.homebank.kz" in normalized or "test-epay-api.epayment.kz" in normalized:
+                derived_bases.extend(
+                    [
+                        "https://test-epay-api.epayment.kz",
+                        "https://test-epay-api.epayment.kz/api",
+                    ]
+                )
+            if "epay-api.homebank.kz" in normalized:
+                derived_bases.extend(
+                    [
+                        "https://epay-api.homebank.kz",
+                        "https://epay-api.homebank.kz/api",
+                    ]
+                )
 
         bases.extend(derived_bases)
 
         candidates: List[str] = []
         for base in bases:
             normalized = base.rstrip("/")
-            candidates.append(f"{normalized}/{path.lstrip('/')}" )
 
             if normalized.endswith("/api"):
-                no_api_base = normalized[:-4]
-                if no_api_base:
-                    candidates.append(f"{no_api_base.rstrip('/')}/{path.lstrip('/')}")
+                root_base = normalized[:-4].rstrip("/")
+                if root_base:
+                    candidates.append(f"{root_base}/{path.lstrip('/')}" )
+                candidates.append(f"{normalized}/{path.lstrip('/')}" )
+            else:
+                candidates.append(f"{normalized}/{path.lstrip('/')}" )
+                candidates.append(f"{normalized}/api/{path.lstrip('/')}" )
 
         # Keep order, remove duplicates
         unique: List[str] = []
