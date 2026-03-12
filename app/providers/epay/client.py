@@ -1,6 +1,7 @@
 import httpx
 import time
 import asyncio
+import json
 from typing import Optional, List
 
 from app.core.config import settings
@@ -275,7 +276,7 @@ class EpayClient:
                             exc.response.text[:500],
                         )
                         if 400 <= status_code < 500 and status_code not in (408, 429):
-                            raise AppError(502, f"ePay error: {status_code}")
+                            raise self._build_upstream_error(exc.response)
                         if attempt < self.retries:
                             await self._sleep_backoff(attempt)
                             continue
@@ -328,7 +329,7 @@ class EpayClient:
                             logger.warning("ePay endpoint not found on this base, trying next URL: %s", url)
                             break
                         if 400 <= status_code < 500 and status_code not in (408, 429):
-                            raise AppError(502, f"ePay error: {status_code}")
+                            raise self._build_upstream_error(exc.response)
                         if attempt < self.retries:
                             await self._sleep_backoff(attempt)
                             continue
@@ -372,7 +373,7 @@ class EpayClient:
                             exc.response.text[:500],
                         )
                         if 400 <= status_code < 500 and status_code not in (408, 429):
-                            raise AppError(502, f"ePay error: {status_code}")
+                            raise self._build_upstream_error(exc.response)
                         if attempt < self.retries:
                             await self._sleep_backoff(attempt)
                             continue
@@ -483,3 +484,22 @@ class EpayClient:
     async def _sleep_backoff(attempt: int) -> None:
         delay = min(3.0, 0.35 * (2 ** (attempt - 1)))
         await asyncio.sleep(delay)
+
+    @staticmethod
+    def _build_upstream_error(response: httpx.Response) -> AppError:
+        status_code = response.status_code
+        message = f"ePay error: {status_code}"
+        code = str(status_code)
+
+        try:
+            payload = response.json()
+        except (ValueError, json.JSONDecodeError):
+            payload = None
+
+        if isinstance(payload, dict):
+            message = str(payload.get("message") or payload.get("resultMessage") or message)
+            code = str(payload.get("code") or payload.get("resultCode") or code)
+
+        # Upstream business-validation errors should be visible to API consumers.
+        outbound_status = 400 if status_code == 400 else 502
+        return AppError(outbound_status, message, code)
