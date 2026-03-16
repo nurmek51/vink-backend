@@ -69,7 +69,7 @@ class EpayClient:
         self,
         invoice_id: str,
         amount: float,
-        currency: str = "KZT",
+        currency: str = "USD",
         post_link: Optional[str] = None,
         failure_post_link: Optional[str] = None,
         secret_hash: Optional[str] = None,

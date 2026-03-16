@@ -15,7 +15,7 @@ class EpayPaymentTokenRequest(BaseModel):
     """Request body for obtaining an ePay payment-scoped token."""
     invoice_id: str
     amount: float
-    currency: str = "KZT"
+    currency: str = "USD"
     terminal: str
     post_link: Optional[str] = None
     failure_post_link: Optional[str] = None
@@ -114,7 +114,7 @@ class EpayStatusResponse(BaseModel):
 class EpayCardIdPaymentRequest(BaseModel):
     """Server-to-server payment using a saved cardId."""
     amount: float
-    currency: str = "KZT"
+    currency: str = "USD"
     name: Optional[str] = None
     terminalId: str
     invoiceId: str

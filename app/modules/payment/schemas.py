@@ -34,7 +34,7 @@ class PaymentRecord(BaseModel):
     user_id: str
     invoice_id: str
     amount: float
-    currency: str = "KZT"
+    currency: str = "USD"
     description: str = ""
     status: PaymentStatus = PaymentStatus.PENDING
     payment_type: PaymentType = PaymentType.ONE_TIME
@@ -64,7 +64,7 @@ class PaymentRecord(BaseModel):
 
 class InitiatePaymentRequest(BaseModel):
     """Client requests a payment session (top-up or purchase)."""
-    amount: Optional[float] = Field(None, gt=0, description="Amount in KZT")
+    amount: Optional[float] = Field(None, gt=0, description="Amount in USD")
     imsi: Optional[str] = Field(None, description="Target eSIM IMSI for top-up mode")
     esim_id: Optional[str] = Field(None, description="Target eSIM id for top-up mode")
     save_card: bool = Field(False, description="If true, initiates card verification/saving flow")
@@ -106,7 +106,7 @@ class RecurrentPaymentRequest(BaseModel):
     card_id: str = Field(..., description="Stored ePay cardId UUID")
     amount: float = Field(..., gt=0)
     description: str = Field("Recurrent charge", max_length=125)
-    currency: str = "KZT"
+    currency: str = "USD"
 
     @model_validator(mode="after")
     def validate_target_identifier(self):

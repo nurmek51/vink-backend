@@ -9,7 +9,7 @@ def test_recurrent_request_accepts_imsi():
         card_id="card-id-1",
         amount=5,
         description="Subscription",
-        currency="KZT",
+        currency="USD",
     )
 
     assert request.imsi == "260010183697260"
@@ -22,7 +22,7 @@ def test_recurrent_request_accepts_legacy_esim_id():
         card_id="card-id-1",
         amount=5,
         description="Subscription",
-        currency="KZT",
+        currency="USD",
     )
 
     assert request.esim_id == "free-260010183697260"
@@ -37,7 +37,7 @@ def test_recurrent_request_rejects_both_imsi_and_esim_id():
             card_id="card-id-1",
             amount=5,
             description="Subscription",
-            currency="KZT",
+            currency="USD",
         )
     except ValidationError as exc:
         assert "Provide either imsi or esim_id, not both" in str(exc)
@@ -52,7 +52,7 @@ def test_recurrent_request_requires_identifier():
             card_id="card-id-1",
             amount=5,
             description="Subscription",
-            currency="KZT",
+            currency="USD",
         )
     except ValidationError as exc:
         assert "Either imsi or esim_id is required" in str(exc)

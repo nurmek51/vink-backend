@@ -47,8 +47,8 @@ class EsimService:
 
         package_mb = float(settings.EPAY_ESIM_AUTOPAY_PACKAGE_MB)
         charge_usd = float(current_rate_usd_per_mb) * package_mb
-        charge_kzt = round(charge_usd * float(settings.EPAY_USD_TO_KZT_RATE), 2)
-        if charge_kzt <= 0:
+        charge_usd = round(charge_usd, 2)
+        if charge_usd <= 0:
             esim_data["autopay_last_status"] = "invalid_tariff_rate"
             await self.repository.save_esim(esim_data)
             return
@@ -103,8 +103,8 @@ class EsimService:
                 id=payment_id,
                 user_id=user.id,
                 invoice_id=invoice_id,
-                amount=charge_kzt,
-                currency="KZT",
+                amount=charge_usd,
+                currency="USD",
                 description=f"AutoPay 3GB {country_name} @ {current_rate_usd_per_mb:.6f} USD/MB",
                 status=PaymentStatus.PENDING,
                 payment_type=PaymentType.RECURRENT,
@@ -118,8 +118,8 @@ class EsimService:
             token_resp = await self._call_epay_with_deadline(
                 self.epay.obtain_payment_token(
                     invoice_id=invoice_id,
-                    amount=charge_kzt,
-                    currency="KZT",
+                    amount=charge_usd,
+                    currency="USD",
                     post_link=post_link,
                     failure_post_link=post_link,
                 ),
@@ -127,8 +127,8 @@ class EsimService:
             )
 
             pay_req = EpayCardIdPaymentRequest(
-                amount=charge_kzt,
-                currency="KZT",
+                amount=charge_usd,
+                currency="USD",
                 name="VinkSIM AutoPay",
                 terminalId=self.epay.terminal_id,
                 invoiceId=invoice_id,
@@ -177,7 +177,6 @@ class EsimService:
             esim_data["autopay_last_card_id"] = payment_resp.cardID or selected_card
             esim_data["autopay_last_rate_usd_per_mb"] = float(current_rate_usd_per_mb)
             esim_data["autopay_last_amount_usd"] = round(charge_usd, 4)
-            esim_data["autopay_last_amount_kzt"] = charge_kzt
             esim_data["autopay_last_country"] = country_name
             await self.repository.save_esim(esim_data)
         except AppError as exc:

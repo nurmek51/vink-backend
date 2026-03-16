@@ -110,7 +110,7 @@ Response (200):
     "payment_type": "one_time",
     "checkout_url": "https://your-domain/api/v1/payments/checkout/<payment_id>?token=<token>",
     "amount": 5,
-    "currency": "KZT"
+    "currency": "USD"
   }
 }
 ```
@@ -139,7 +139,7 @@ Request:
   "card_id": "<saved_card_id>",
   "amount": 5,
   "description": "Subscription",
-  "currency": "KZT"
+  "currency": "USD"
 }
 ```
 
@@ -150,7 +150,7 @@ Legacy fallback is still supported:
   "card_id": "<saved_card_id>",
   "amount": 5,
   "description": "Subscription",
-  "currency": "KZT"
+  "currency": "USD"
 }
 ```
 

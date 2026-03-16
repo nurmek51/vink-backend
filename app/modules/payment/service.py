@@ -76,7 +76,7 @@ class PaymentService:
         
         is_card_save = req.save_card
         payment_amount = float(req.amount or 0)
-        payment_currency = "KZT"
+        payment_currency = "USD"
         payment_type = PaymentType.ONE_TIME if target_esim else PaymentType.PURCHASE
         payment_description = "Top-up eSIM" if target_esim else "Purchase eSIM"
 
@@ -624,7 +624,7 @@ class PaymentService:
             dateTime=str(payload.get("dateTime") or datetime.utcnow().isoformat()),
             invoiceId=str(invoice_id),
             amount=float(payload.get("amount") or 0),
-            currency=str(payload.get("currency") or "KZT"),
+            currency=str(payload.get("currency") or "USD"),
             terminal=str(payload.get("terminal") or settings.EPAY_TERMINAL_ID),
             code=str(code or "unknown"),
             reason=str(reason),
