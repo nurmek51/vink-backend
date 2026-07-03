@@ -1,0 +1,116 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PYTHON_VERSION: "3.11"
+  IMAGE_NAME: vink-backend
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          TESTING: "True"
+        run: pytest
+
+  deploy:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Authorize Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push image
+        id: build
+        env:
+          IMAGE_URI: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          docker build -t "${IMAGE_URI}" .
+          docker push "${IMAGE_URI}"
+          echo "image_uri=${IMAGE_URI}" >> "${GITHUB_OUTPUT}"
+
+      - name: Render Cloud Run env file
+        run: |
+          cat <<'EOF' > cloud-run-env.yaml
+          PROJECT_NAME: "Vink Backend"
+          API_V1_STR: "/api/v1"
+          ALGORITHM: "HS256"
+          ACCESS_TOKEN_EXPIRE_MINUTES: "11520"
+          REFRESH_TOKEN_EXPIRE_DAYS: "30"
+          BACKEND_CORS_ORIGINS: '${{ vars.BACKEND_CORS_ORIGINS }}'
+          IMSI_API_URL: "${{ vars.IMSI_API_URL }}"
+          EPAY_OAUTH_URL: "${{ vars.EPAY_OAUTH_URL }}"
+          EPAY_API_URL: "${{ vars.EPAY_API_URL }}"
+          EPAY_OAUTH_FALLBACK_URL: "${{ vars.EPAY_OAUTH_FALLBACK_URL }}"
+          EPAY_API_FALLBACK_URL: "${{ vars.EPAY_API_FALLBACK_URL }}"
+          EPAY_PAYMENT_PAGE_JS: "${{ vars.EPAY_PAYMENT_PAGE_JS }}"
+          EPAY_POSTLINK_BASE_URL: "${{ vars.EPAY_POSTLINK_BASE_URL }}"
+          EPAY_CHECKOUT_BASE_URL: "${{ vars.EPAY_CHECKOUT_BASE_URL }}"
+          EPAY_DEFAULT_BACK_LINK: "${{ vars.EPAY_DEFAULT_BACK_LINK }}"
+          EPAY_DEFAULT_FAILURE_BACK_LINK: "${{ vars.EPAY_DEFAULT_FAILURE_BACK_LINK }}"
+          EPAY_ESIM_AUTOPAY_ENABLED: "${{ vars.EPAY_ESIM_AUTOPAY_ENABLED }}"
+          EPAY_ESIM_AUTOPAY_THRESHOLD_MB: "${{ vars.EPAY_ESIM_AUTOPAY_THRESHOLD_MB }}"
+          EPAY_ESIM_AUTOPAY_PACKAGE_MB: "${{ vars.EPAY_ESIM_AUTOPAY_PACKAGE_MB }}"
+          EPAY_ESIM_AUTOPAY_COOLDOWN_MINUTES: "${{ vars.EPAY_ESIM_AUTOPAY_COOLDOWN_MINUTES }}"
+          EPAY_HTTP_TIMEOUT_SECONDS: "${{ vars.EPAY_HTTP_TIMEOUT_SECONDS }}"
+          EPAY_HTTP_RETRIES: "${{ vars.EPAY_HTTP_RETRIES }}"
+          EPAY_REQUEST_DEADLINE_SECONDS: "${{ vars.EPAY_REQUEST_DEADLINE_SECONDS }}"
+          EPAY_PENDING_TTL_MINUTES: "${{ vars.EPAY_PENDING_TTL_MINUTES }}"
+          EOF
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "${{ vars.CLOUD_RUN_SERVICE }}" \
+            --image "${{ steps.build.outputs.image_uri }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --allow-unauthenticated \
+            --port 8000 \
+            --service-account "${{ vars.CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT }}" \
+            --cpu 1 \
+            --memory 512Mi \
+            --min-instances 0 \
+            --max-instances 3 \
+            --env-vars-file cloud-run-env.yaml \
+            --set-secrets SECRET_KEY=SECRET_KEY:latest,IMSI_USERNAME=IMSI_USERNAME:latest,IMSI_PASSWORD=IMSI_PASSWORD:latest,ADMIN_API_KEY=ADMIN_API_KEY:latest,ADMIN_API_KEY_HASH=ADMIN_API_KEY_HASH:latest,TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,TWILIO_SERVICE_SID=TWILIO_SERVICE_SID:latest,EPAY_CLIENT_ID=EPAY_CLIENT_ID:latest,EPAY_CLIENT_SECRET=EPAY_CLIENT_SECRET:latest,EPAY_TERMINAL_ID=EPAY_TERMINAL_ID:latest
+
+      - name: Show service URL
+        run: gcloud run services describe ${{ vars.CLOUD_RUN_SERVICE }} --region=${{ vars.GCP_REGION }} --format='value(status.url)'

@@ -1,3 +1,4 @@
+import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 from app.core.config import settings
@@ -18,15 +19,19 @@ def init_firestore():
 
     try:
         if not firebase_admin._apps:
-            if os.path.exists(settings.FIREBASE_CREDENTIALS_PATH):
+            if settings.FIREBASE_CREDENTIALS_JSON:
+                cred = credentials.Certificate(json.loads(settings.FIREBASE_CREDENTIALS_JSON))
+                firebase_admin.initialize_app(cred)
+                logger.info("Firebase initialized with credentials from FIREBASE_CREDENTIALS_JSON.")
+            elif settings.FIREBASE_CREDENTIALS_PATH and os.path.exists(settings.FIREBASE_CREDENTIALS_PATH):
                 cred = credentials.Certificate(settings.FIREBASE_CREDENTIALS_PATH)
                 firebase_admin.initialize_app(cred)
                 logger.info("Firebase initialized with credentials.")
             else:
-                logger.warning(f"Firebase credentials not found at {settings.FIREBASE_CREDENTIALS_PATH}. Using mock/anonymous or failing.")
-                # For development without creds, we might want to just warn or use a mock if possible.
-                # But Firestore client usually needs creds. 
-                # We will initialize with default if available (e.g. GCloud env vars)
+                logger.warning(
+                    "Firebase credentials file not found at %s. Falling back to default credentials.",
+                    settings.FIREBASE_CREDENTIALS_PATH,
+                )
                 try:
                     firebase_admin.initialize_app()
                     logger.info("Firebase initialized with default credentials.")

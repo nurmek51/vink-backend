@@ -1,0 +1,14 @@
+.git
+.github
+.gitignore
+.pytest_cache
+.venv
+__pycache__/
+*.py[cod]
+*.log
+.env
+.env.*
+vink-testik.json
+docker-compose.yml
+tests/
+README.md

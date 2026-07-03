@@ -1,10 +1,11 @@
-import os
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List, Optional
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Vink Backend"
     API_V1_STR: str = "/api/v1"
+    PORT: int = 8000
     
     # Security
     SECRET_KEY: str = "nurmek-vink-dev"
@@ -17,7 +18,8 @@ class Settings(BaseSettings):
     ]
     
     # Firebase
-    FIREBASE_CREDENTIALS_PATH: str = "vink-testik.json"
+    FIREBASE_CREDENTIALS_PATH: Optional[str] = "vink-testik.json"
+    FIREBASE_CREDENTIALS_JSON: Optional[str] = None
     
     # Provider (Imsimarket)
     IMSI_API_URL: str = "https://mit.imsipay.com/b2b"
@@ -67,43 +69,3 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
-
-def debug_env_vars():
-    """Prints all environment variables in a safe way for debugging."""
-    print(f"--- ENVIRONMENT DEBUG ---")
-    print(f"CWD: {os.getcwd()}")
-    try:
-        print(f"FILES IN CWD: {os.listdir('.')}")
-    except Exception as e:
-        print(f"Error listing CWD: {e}")
-    
-    if os.path.exists(".env"):
-        print(".env file exists")
-        try:
-            with open(".env", "r") as f:
-                lines = f.readlines()
-                print(f".env content (masked):")
-                for line in lines:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    if "=" in line:
-                        key, val = line.split("=", 1)
-                        val = val.strip().strip('"').strip("'")
-                        masked_val = val[:4] + "****" if len(val) > 4 else "****"
-                        print(f"  {key}={masked_val}")
-                    else:
-                        print(f"  (Line without =): {line}")
-        except Exception as e:
-            print(f"Error reading .env: {e}")
-    else:
-        print(".env file NOT FOUND")
-        
-    print(f"Settings loaded in Python:")
-    for key in ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_SERVICE_SID"]:
-        val = getattr(settings, key)
-        print(f"  {key}={'FOUND' if val else 'MISSING'}")
-    print(f"-------------------------")
-
-# Run debug on import
-debug_env_vars()
